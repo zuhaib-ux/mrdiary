@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="icon_bg">#00796B</color>
+    <style name="AppTheme" parent="android:Theme.Material.Light.DarkActionBar">
+        <item name="android:colorPrimary">#00796B</item>
+        <item name="android:colorPrimaryDark">#004D40</item>
+        <item name="android:colorAccent">#00897B</item>
+        <item name="android:windowBackground">#F2F4F5</item>
+    </style>
+    <style name="ViewerTheme" parent="android:Theme.Material.NoActionBar.Fullscreen" />
+</resources>
