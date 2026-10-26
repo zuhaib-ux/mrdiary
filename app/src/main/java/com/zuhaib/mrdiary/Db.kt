@@ -39,7 +39,7 @@ data class OrderItem(var productId: Long, var name: String, var qty: Int, var pr
 /** Report ke liye: naam, ginti, raqam */
 data class Agg(val name: String, val count: Double, val amount: Double)
 
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db", null, 1) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db", null, 2) {
 
     companion object {
         @Volatile private var inst: Db? = null
@@ -54,10 +54,18 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db",
         d.execSQL("CREATE TABLE orders(id INTEGER PRIMARY KEY AUTOINCREMENT, store_id INTEGER, store_name TEXT, date INTEGER, gross REAL, discount REAL, net REAL, note TEXT DEFAULT '')")
         d.execSQL("CREATE TABLE order_items(id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER, product_id INTEGER, name TEXT, qty INTEGER, price REAL, disc REAL)")
         d.execSQL("CREATE TABLE doctors(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, specialty TEXT DEFAULT '', clinic TEXT DEFAULT '', area TEXT DEFAULT '', phone TEXT DEFAULT '')")
+        createDoctorProducts(d)
         d.execSQL("CREATE TABLE visits(id INTEGER PRIMARY KEY AUTOINCREMENT, doctor_id INTEGER, date INTEGER, products TEXT DEFAULT '', notes TEXT DEFAULT '', followup INTEGER DEFAULT 0, follow_done INTEGER DEFAULT 0)")
     }
 
-    override fun onUpgrade(d: SQLiteDatabase, old: Int, new: Int) {}
+    override fun onUpgrade(d: SQLiteDatabase, old: Int, new: Int) {
+        if (old < 2) createDoctorProducts(d)
+    }
+
+    /** kind 1 = already prescribe kar rahe, kind 2 = promote karna hai */
+    private fun createDoctorProducts(d: SQLiteDatabase) {
+        d.execSQL("CREATE TABLE IF NOT EXISTS doctor_products(doctor_id INTEGER, product_id INTEGER, kind INTEGER, PRIMARY KEY(doctor_id, product_id))")
+    }
 
     // ---------- helpers ----------
     private fun cv(vararg p: Pair<String, Any?>) = ContentValues().apply {
@@ -111,6 +119,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db",
     fun setAudio(id: Long, path: String?) = upsert("products", id, cv("audio" to path))
 
     fun deleteProduct(id: Long) {
+        del("doctor_products", "product_id=?", id)
         del("product_images", "product_id=?", id)
         del("products", "id=?", id)
     }
@@ -152,8 +161,43 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db",
         upsert("doctors", id, cv("name" to name, "specialty" to specialty, "clinic" to clinic, "area" to area, "phone" to phone))
 
     fun deleteDoctor(id: Long) {
+        del("doctor_products", "doctor_id=?", id)
         del("visits", "doctor_id=?", id)
         del("doctors", "id=?", id)
+    }
+
+    /** product_id -> kind (1 prescribing, 2 promote) */
+    fun doctorProducts(doctorId: Long): Map<Long, Int> =
+        q("SELECT product_id, kind FROM doctor_products WHERE doctor_id=?", doctorId) { it.l("product_id") to it.i("kind") }.toMap()
+
+    fun setDoctorProducts(doctorId: Long, map: Map<Long, Int>) {
+        val w = writableDatabase
+        w.beginTransaction()
+        try {
+            del("doctor_products", "doctor_id=?", doctorId)
+            map.forEach { (pid, kind) ->
+                w.insert("doctor_products", null, cv("doctor_id" to doctorId, "product_id" to pid, "kind" to kind))
+            }
+            w.setTransactionSuccessful()
+        } finally { w.endTransaction() }
+    }
+
+    fun setDoctorProduct(doctorId: Long, productId: Long, kind: Int) {
+        writableDatabase.insertWithOnConflict(
+            "doctor_products", null, cv("doctor_id" to doctorId, "product_id" to productId, "kind" to kind),
+            SQLiteDatabase.CONFLICT_REPLACE
+        )
+    }
+
+    fun removeDoctorProduct(doctorId: Long, productId: Long) = del("doctor_products", "doctor_id=? AND product_id=?", doctorId, productId)
+
+    /** List ke liye: har doctor ke kitne prescribing / promote products */
+    fun doctorProductCounts(): Map<Long, Pair<Int, Int>> {
+        val out = HashMap<Long, Pair<Int, Int>>()
+        q("SELECT doctor_id, SUM(kind=1) AS a, SUM(kind=2) AS b FROM doctor_products GROUP BY doctor_id") {
+            out[it.l("doctor_id")] = it.i("a") to it.i("b")
+        }
+        return out
     }
 
     // ---------- visits ----------

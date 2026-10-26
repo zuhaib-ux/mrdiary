@@ -358,9 +358,45 @@ abstract class BaseActivity : Activity() {
         val area = input("Maslan: Sukkur, Khairpur", d?.area ?: "")
         val phone = input("03xx xxxxxxx", d?.phone ?: "", T.PHONE)
         val body = form("Doctor ka naam" to name, "Specialty" to spec, "Clinic / Hospital" to clinic, "Area / Shehar" to area, "Phone" to phone)
+
+        // ---- Products: already prescribing / promote ----
+        val prods = db.products()
+        val kinds = HashMap<Long, Int>(if (d != null) db.doctorProducts(d.id) else emptyMap())
+        val presBtn = btn("", 1, 14f) {}
+        val promBtn = btn("", 1, 14f) {}
+        fun label(kind: Int): String {
+            val names = prods.filter { kinds[it.id] == kind }.map { it.name }
+            val head = if (kind == 1) "✅ Prescribe kar rahe" else "🎯 Promote karna hai"
+            return if (names.isEmpty()) "$head: koi nahi ▾" else "$head (${names.size}): ${names.joinToString(", ")} ▾"
+        }
+        fun refreshBtns() { presBtn.text = label(1); promBtn.text = label(2) }
+        fun choose(kind: Int) {
+            if (prods.isEmpty()) { toast("Pehle Products mein medicines add karo"); return }
+            val checked = BooleanArray(prods.size) { kinds[prods[it].id] == kind }
+            AlertDialog.Builder(this)
+                .setTitle(if (kind == 1) "Kaun si medicines already likh rahe hain?" else "Kaun si medicines promote karni hain?")
+                .setMultiChoiceItems(prods.map { it.name }.toTypedArray(), checked) { _, i, b -> checked[i] = b }
+                .setPositiveButton("OK") { _, _ ->
+                    prods.forEachIndexed { i, p ->
+                        if (checked[i]) kinds[p.id] = kind          // dusri list se khud hat jayegi
+                        else if (kinds[p.id] == kind) kinds.remove(p.id)
+                    }
+                    refreshBtns()
+                }.setNegativeButton("Cancel", null).show()
+        }
+        presBtn.setOnClickListener { choose(1) }
+        promBtn.setOnClickListener { choose(2) }
+        presBtn.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        promBtn.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        refreshBtns()
+        body.add(text("Products", 13f, color = C.SUB), 16)
+        body.add(presBtn, 4)
+        body.add(promBtn, 8)
+
         formDialog(if (d == null) "Naya doctor" else "Doctor edit", body) {
             if (name.str().isEmpty()) { name.error = "Naam likho"; return@formDialog false }
             val id = db.saveDoctor(d?.id ?: 0, name.str(), spec.str(), clinic.str(), area.str(), phone.str())
+            db.setDoctorProducts(id, kinds)
             onSaved(id); true
         }
     }

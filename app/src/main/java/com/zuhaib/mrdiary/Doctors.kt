@@ -36,13 +36,16 @@ class DoctorListActivity : BaseActivity() {
     private fun fillList() {
         listBox.removeAllViews()
         val all = db.doctors()
+        val counts = db.doctorProductCounts()
         val list = all.filter { d ->
             (area.isBlank() || d.area.trim().equals(area, true)) &&
                 (query.isBlank() || listOf(d.name, d.specialty, d.clinic, d.area).any { it.contains(query, true) })
         }
         if (all.isEmpty()) listBox.add(empty("Abhi koi doctor nahi. Apne area ke doctors add karo."))
         list.forEach { d ->
-            val last = if (d.lastVisit > 0) "Last visit: ${Fmt.date(d.lastVisit)}" else "Abhi visit nahi hui"
+            val c = counts[d.id]
+            val pc = if (c != null && (c.first + c.second) > 0) "✅ ${c.first}  🎯 ${c.second}  •  " else ""
+            val last = pc + if (d.lastVisit > 0) "Last visit: ${Fmt.date(d.lastVisit)}" else "Abhi visit nahi hui"
             listBox.add(
                 listRow(
                     d.name,
@@ -88,6 +91,21 @@ class DoctorDetailActivity : BaseActivity() {
         c.add(r, 12)
         content.add(c)
 
+        // ---- Products ----
+        val prods = db.products()
+        val kinds = db.doctorProducts(did)
+        val pres = prods.filter { kinds[it.id] == 1 }
+        val prom = prods.filter { kinds[it.id] == 2 }
+        val pc = card()
+        pc.add(text("✅ Already prescribe kar rahe (${pres.size})", 15f, true, C.PRIMARY))
+        if (pres.isEmpty()) pc.add(text("Koi nahi", 13.5f, color = C.SUB), 4)
+        else pc.add(chipRow(*pres.map { p -> chip(p.name, true) { productMenu(p, 1) } }.toTypedArray()), 6)
+        pc.add(text("🎯 Promote karna hai (${prom.size})", 15f, true, C.ORANGE), 14)
+        if (prom.isEmpty()) pc.add(text("Koi nahi", 13.5f, color = C.SUB), 4)
+        else pc.add(chipRow(*prom.map { p -> chip(p.name, false) { productMenu(p, 2) } }.toTypedArray()), 6)
+        pc.add(text("Medicine par tap karo to list badal sakte ho. Lists ✏ Edit se bhi set hoti hain.", 12f, color = C.SUB), 10)
+        content.add(pc, 10)
+
         content.add(btn("+ Visit add karo") { visitDialog(d) }, 12)
 
         val visits = db.visits(did)
@@ -122,10 +140,26 @@ class DoctorDetailActivity : BaseActivity() {
         }
     }
 
+    private fun productMenu(p: Product, kind: Int) {
+        val opts = if (kind == 2) listOf("✅ Ab prescribe kar rahe hain", "🗑 List se hatao", "📄 Literature / script kholo")
+                   else listOf("🎯 Wapas promote list mein", "🗑 List se hatao", "📄 Literature / script kholo")
+        pick(p.name, opts) { i ->
+            when (i) {
+                0 -> { db.setDoctorProduct(did, p.id, if (kind == 2) 1 else 2); refresh()
+                       if (kind == 2) toast("✓ Mubarak ho! ${p.name} ab prescribing mein") }
+                1 -> { db.removeDoctorProduct(did, p.id); refresh() }
+                2 -> open(ProductDetailActivity::class.java, p.id)
+            }
+        }
+    }
+
     private fun visitDialog(d: Doctor) {
         val prods = db.products()
-        val checked = BooleanArray(prods.size)
-        val prodIn = input("Kaun si medicines detail kin", "", T.TEXT)
+        val kinds = db.doctorProducts(d.id)
+        // Promote wali medicines pehle se chuni hui, kyunki visit mein wahi detail karni hain
+        val checked = BooleanArray(prods.size) { kinds[prods[it].id] == 2 }
+        val prodIn = input("Kaun si medicines detail kin",
+            prods.filterIndexed { i, _ -> checked[i] }.joinToString(", ") { it.name }, T.TEXT)
         val notes = input("Doctor ne kya kaha, kya promise kiya…", "", T.MULTI)
         var follow = 0L
         val followBtn = btn("🔔 Follow-up: Nahi ▾", 1, 14f) {}
