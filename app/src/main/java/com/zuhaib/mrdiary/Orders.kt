@@ -126,8 +126,8 @@ class OrderEditActivity : BaseActivity() {
     private fun itemDialog(index: Int) {
         val prods = db.products()
         if (prods.isEmpty()) {
-            confirm("Pehle Products mein medicine add karni hogi. Abhi add karein?") {
-                editProduct(null) { refresh(); itemDialog(index) }
+            confirm("Pehle Products mein medicine add karni hogi. Products kholein?") {
+                open(ProductListActivity::class.java)
             }
             return
         }
@@ -151,7 +151,7 @@ class OrderEditActivity : BaseActivity() {
         qty.onChange { upd() }; rate.onChange { upd() }; disc.onChange { upd() }
 
         prodBtn.setOnClickListener {
-            pick("Medicine chuno", prods.map { if (it.price > 0) "${it.name}  — ${Fmt.rs(it.price)}" else it.name }) { i ->
+            pick("Medicine chuno", prods.map { if (it.price > 0) "${it.label}  — ${Fmt.rs(it.price)}" else it.label }) { i ->
                 sel = prods[i]; selName = prods[i].name
                 prodBtn.text = "$selName ▾"
                 rate.setText(if (prods[i].price > 0) Fmt.plain(prods[i].price) else "")

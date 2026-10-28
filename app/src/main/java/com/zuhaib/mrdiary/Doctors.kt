@@ -42,6 +42,7 @@ class DoctorListActivity : BaseActivity() {
                 (query.isBlank() || listOf(d.name, d.specialty, d.clinic, d.area).any { it.contains(query, true) })
         }
         if (all.isEmpty()) listBox.add(empty("Abhi koi doctor nahi. Apne area ke doctors add karo."))
+        else listBox.add(text("Naam par tap = literature / detailing • 📋 = detail aur visits", 12f, color = C.SUB).apply { setPadding(dp(4), dp(4), 0, dp(2)) })
         list.forEach { d ->
             val c = counts[d.id]
             val pc = if (c != null && (c.first + c.second) > 0) "✅ ${c.first}  🎯 ${c.second}  •  " else ""
@@ -49,14 +50,23 @@ class DoctorListActivity : BaseActivity() {
             listBox.add(
                 listRow(
                     d.name,
-                    listOf(d.specialty, d.clinic, d.area).filter { it.isNotBlank() }.joinToString(" • "),
-                    last, iconBtn("📞") { call(d.phone) },
+                    listOf(d.specialty, d.clinic, d.area).filter { it.isNotBlank() }.joinToString(" • ") +
+                        (if (d.timing.isNotBlank()) "\n🕐 ${d.timing}" else ""),
+                    last, rowBtns(d),
+                    { open(DetailingActivity::class.java, d.id) },
                     { open(DoctorDetailActivity::class.java, d.id) }
                 ), 6
             )
         }
     }
+
+    private fun rowBtns(d: Doctor) = hrow().apply {
+        addView(iconBtn("📞") { call(d.phone) })
+        addView(iconBtn("📋") { open(DoctorDetailActivity::class.java, d.id) },
+            LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = dp(6) })
+    }
 }
+
 
 // =====================================================================
 // Doctor detail + visits
@@ -64,9 +74,11 @@ class DoctorListActivity : BaseActivity() {
 class DoctorDetailActivity : BaseActivity() {
     private var did = 0L
     private var doctor: Doctor? = null
+    private var autoVisit = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         did = intent.getLongExtra("id", 0)
+        autoVisit = intent.getBooleanExtra("addVisit", false)
         super.onCreate(savedInstanceState)
     }
 
@@ -82,7 +94,8 @@ class DoctorDetailActivity : BaseActivity() {
             if (d.specialty.isNotBlank()) "🩺 ${d.specialty}" else "",
             if (d.clinic.isNotBlank()) "🏥 ${d.clinic}" else "",
             if (d.area.isNotBlank()) "📍 ${d.area}" else "",
-            if (d.phone.isNotBlank()) "📱 ${d.phone}" else ""
+            if (d.phone.isNotBlank()) "📱 ${d.phone}" else "",
+            if (d.timing.isNotBlank()) "🕐 ${d.timing}" else ""
         ).filter { it.isNotBlank() }.forEach { c.add(text(it, 14.5f, color = C.SUB), 4) }
         val r = hrow()
         r.addWeighted(btn("📞 Call") { call(d.phone) })
@@ -106,7 +119,11 @@ class DoctorDetailActivity : BaseActivity() {
         pc.add(text("Medicine par tap karo to list badal sakte ho. Lists ✏ Edit se bhi set hoti hain.", 12f, color = C.SUB), 10)
         content.add(pc, 10)
 
-        content.add(btn("+ Visit add karo") { visitDialog(d) }, 12)
+        val ar = hrow()
+        ar.addWeighted(btn("📖 Literature dikhao", 1) { open(DetailingActivity::class.java, did) })
+        ar.addWeighted(btn("+ Visit add karo") { visitDialog(d) }, 8)
+        content.add(ar, 12)
+        if (autoVisit) { autoVisit = false; content.post { visitDialog(d) } }
 
         val visits = db.visits(did)
         section("🗓 Visits (${visits.size})")
@@ -148,7 +165,7 @@ class DoctorDetailActivity : BaseActivity() {
                 0 -> { db.setDoctorProduct(did, p.id, if (kind == 2) 1 else 2); refresh()
                        if (kind == 2) toast("✓ Mubarak ho! ${p.name} ab prescribing mein") }
                 1 -> { db.removeDoctorProduct(did, p.id); refresh() }
-                2 -> open(ProductDetailActivity::class.java, p.id)
+                2 -> open(ProductDetailActivity::class.java, p.brandId)
             }
         }
     }

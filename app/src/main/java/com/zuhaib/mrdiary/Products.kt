@@ -23,7 +23,7 @@ import android.widget.TextView
 import java.io.File
 
 // =====================================================================
-// Products list
+// Products (brands) list
 // =====================================================================
 class ProductListActivity : BaseActivity() {
     private var query = ""
@@ -35,31 +35,40 @@ class ProductListActivity : BaseActivity() {
     }
 
     override fun render() {
-        content.add(btn("+ Nayi medicine add karo") {
-            editProduct(null) { id -> open(ProductDetailActivity::class.java, id) }
-        })
-        content.add(searchBox("🔍 Medicine dhoondo", query) { query = it; fillList() }, 10)
+        val r = hrow()
+        r.addWeighted(btn("+ Naya product") { editBrand(null) { id -> open(ProductDetailActivity::class.java, id) } })
+        r.addWeighted(btn("📋 Price list", 1) {
+            startActivity(Intent(this, ImageViewActivity::class.java).putExtra("paths", Seed.refImages(this)))
+        }, 8)
+        content.add(r)
+        content.add(searchBox("🔍 Medicine ya formula dhoondo", query) { query = it; fillList() }, 10)
         listBox = content.add(vbox(), 4)
         fillList()
     }
 
     private fun fillList() {
         listBox.removeAllViews()
-        val all = db.products()
-        val list = all.filter { query.isBlank() || it.name.contains(query, true) || it.indication.contains(query, true) }
-        if (all.isEmpty()) listBox.add(empty("Abhi koi medicine nahi. Upar wale button se apni pehli medicine add karo."))
-        list.forEach { p ->
-            val imgs = db.images(p.id).size
+        val all = db.brands()
+        val list = all.filter {
+            query.isBlank() || it.name.contains(query, true) || it.generic.contains(query, true) || it.category.contains(query, true)
+        }
+        if (all.isEmpty()) listBox.add(empty("Abhi koi product nahi. Upar wale button se add karo."))
+        list.forEach { b ->
+            val skus = db.products(b.id)
+            val imgs = db.images(b.id).size
             val badges = buildList {
-                if (imgs > 0) add("📄 $imgs")
-                if (p.script.isNotBlank()) add("📝 Script")
-                if (p.audio != null) add("🎙 Voice")
+                add(if (imgs > 0) "📄 $imgs" else "📄 —")
+                if (b.script.isNotBlank()) add("📝")
+                if (b.audio != null) add("🎙")
+                if (skus.isNotEmpty()) add(skus.joinToString(" | ") { s ->
+                    (s.strength.ifBlank { s.pack }) + if (s.price > 0) " ${Fmt.n(s.price)}" else ""
+                })
             }.joinToString("   ")
             listBox.add(
                 listRow(
-                    p.name,
-                    listOf(p.pack, if (p.price > 0) Fmt.rs(p.price) else "").filter { it.isNotBlank() }.joinToString(" • "),
-                    badges, null, { open(ProductDetailActivity::class.java, p.id) }
+                    b.name,
+                    listOf(b.generic, b.category).filter { it.isNotBlank() }.joinToString(" • "),
+                    badges, null, { open(ProductDetailActivity::class.java, b.id) }
                 ), 6
             )
         }
@@ -67,11 +76,11 @@ class ProductListActivity : BaseActivity() {
 }
 
 // =====================================================================
-// Product detail: literature photos + script + voice
+// Brand detail: SKUs/prices + literature photos + script + voice
 // =====================================================================
 class ProductDetailActivity : BaseActivity() {
     private var pid = 0L
-    private var product: Product? = null
+    private var brand: Brand? = null
 
     private var recorder: MediaRecorder? = null
     private var recFile: File? = null
@@ -120,19 +129,27 @@ class ProductDetailActivity : BaseActivity() {
     }
 
     override fun render() {
-        val p = db.product(pid)
+        val p = db.brand(pid)
         if (p == null) { finish(); return }
-        product = p
+        brand = p
         title = p.name
 
         // ---- Info ----
         val info = card()
         info.add(text(p.name, 20f, true))
-        val sub = listOf(p.pack, if (p.price > 0) "Trade price: ${Fmt.rs(p.price)}" else "").filter { it.isNotBlank() }
-        if (sub.isNotEmpty()) info.add(text(sub.joinToString(" • "), 14f, color = C.SUB), 4)
-        if (p.indication.isNotBlank()) info.add(text("🎯 ${p.indication}", 14.5f, color = C.PRIMARY_DARK), 6)
-        info.add(btn("✏ Edit", 1, 14f) { editProduct(p) { refresh() } }, 10, WRAP)
+        if (p.generic.isNotBlank()) info.add(text("(${p.generic})", 14.5f, color = C.SUB), 2)
+        if (p.category.isNotBlank()) info.add(text("🎯 ${p.category}", 14.5f, color = C.PRIMARY_DARK), 6)
+        info.add(btn("✏ Edit naam", 1, 14f) { editBrand(p) { refresh() } }, 10, WRAP)
         content.add(info)
+
+        // ---- SKUs / prices ----
+        section("💰 Price (tap karke badlo)")
+        val sc0 = card()
+        val skus = db.products(pid)
+        if (skus.isEmpty()) sc0.add(empty("Abhi koi strength/pack nahi."))
+        skus.forEachIndexed { i, s -> sc0.add(skuRow(s) { editSku(pid, s) { refresh() } }, if (i == 0) 0 else 8) }
+        sc0.add(btn("+ Strength / pack add karo", 3, 14f) { editSku(pid, null) { refresh() } }, 12, WRAP)
+        content.add(sc0)
 
         // ---- Literature ----
         section("📄 Literature (${db.images(pid).size})")
@@ -185,7 +202,7 @@ class ProductDetailActivity : BaseActivity() {
     }
 
     // ---------------- script ----------------
-    private fun editScript(p: Product) {
+    private fun editScript(p: Brand) {
         val box = input("Assalam o Alaikum Doctor sahib...", p.script, T.MULTI).apply { minLines = 10 }
         formDialog("Script — ${p.name}", box) {
             db.setScript(p.id, box.text.toString().trim()); refresh(); true
@@ -193,7 +210,7 @@ class ProductDetailActivity : BaseActivity() {
     }
 
     // ---------------- audio ----------------
-    private fun audioCard(p: Product): LinearLayout {
+    private fun audioCard(p: Brand): LinearLayout {
         val c = card()
         timeTv = null; playBtn = null; seek = null; recTv = null
         when {
@@ -271,7 +288,7 @@ class ProductDetailActivity : BaseActivity() {
         try { r.stop() } catch (e: Exception) { ok = false }
         r.release()
         if (ok && f != null && f.length() > 0) {
-            val old = db.product(pid)?.audio
+            val old = db.brand(pid)?.audio
             db.setAudio(pid, f.absolutePath)
             if (old != null && old != f.absolutePath) File(old).delete()
             toast("✓ Recording save ho gayi")
@@ -379,18 +396,18 @@ class ProductDetailActivity : BaseActivity() {
 
     // ---------------- menu ----------------
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menu.add(0, 1, 0, "Medicine delete karo")
+        menu.add(0, 1, 0, "Product delete karo")
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         if (item.itemId == 1) {
-            val p = product ?: return true
-            confirm("${p.name} aur us ki saari photos, script aur recording delete ho jayegi. Pakka?", "Delete") {
+            val p = brand ?: return true
+            confirm("${p.name} ke saare SKUs, literature, script aur recording delete ho jayenge. Pakka?", "Delete") {
                 releasePlayer()
                 db.images(p.id).forEach { File(it.path).delete() }
                 p.audio?.let { File(it).delete() }
-                db.deleteProduct(p.id)
+                db.deleteBrand(p.id)
                 finish()
             }
             return true

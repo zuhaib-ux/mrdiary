@@ -40,6 +40,7 @@
         <activity android:name=".DoctorListActivity" />
         <activity android:name=".DoctorDetailActivity" />
         <activity android:name=".ReportActivity" />
+        <activity android:name=".DetailingActivity" />
 
         <provider
             android:name=".FilesProvider"

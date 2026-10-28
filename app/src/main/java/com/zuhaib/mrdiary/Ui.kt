@@ -127,6 +127,23 @@ abstract class BaseActivity : Activity() {
         refresh()
     }
 
+    fun scrollToTop() { scroll.post { scroll.scrollTo(0, 0) } }
+
+    /** SKU ki price row: strength/pack left, price + per-unit right */
+    fun skuRow(s: Product, highlight: Boolean = true, onClick: (() -> Unit)? = null): LinearLayout = hrow().apply {
+        background = rounded(if (highlight) C.PRIMARY_LIGHT else C.LIGHT, 10f)
+        setPadding(dp(12), dp(9), dp(12), dp(9))
+        val left = vbox()
+        left.add(text((if (highlight && onClick == null) "✓ " else "") + s.strength.ifBlank { s.brandName }, 16f, true))
+        if (s.pack.isNotBlank()) left.add(text(s.pack, 13f, color = C.SUB))
+        addView(left, LinearLayout.LayoutParams(0, WRAP, 1f))
+        val right = vbox().apply { gravity = Gravity.END }
+        right.add(text(if (s.price > 0) Fmt.rs(s.price) else "Price —", 17f, true, C.PRIMARY_DARK), w = WRAP)
+        if (s.unitText.isNotBlank()) right.add(text(s.unitText, 13.5f, true, C.ORANGE), w = WRAP)
+        addView(right)
+        if (onClick != null) setOnClickListener { onClick() }
+    }
+
     fun refresh() {
         val y = scroll.scrollY
         content.removeAllViews()
@@ -268,15 +285,22 @@ abstract class BaseActivity : Activity() {
     }
 
     /** onOk false lautaye to dialog band nahi hota (validation ke liye) */
-    fun formDialog(title: String, body: View, okLabel: String = "Save", onOk: () -> Boolean): AlertDialog {
+    fun formDialog(title: String, body: View, okLabel: String = "Save", neutral: String? = null,
+                   onNeutral: ((AlertDialog) -> Unit)? = null, onOk: () -> Boolean): AlertDialog {
         val wrap = ScrollView(this).apply {
             setPadding(dp(20), dp(4), dp(20), dp(4))
             addView(body)
         }
-        val d = AlertDialog.Builder(this).setTitle(title).setView(wrap)
-            .setPositiveButton(okLabel, null).setNegativeButton("Cancel", null).create()
+        val bld = AlertDialog.Builder(this).setTitle(title).setView(wrap)
+            .setPositiveButton(okLabel, null).setNegativeButton("Cancel", null)
+        if (neutral != null) bld.setNeutralButton(neutral, null)
+        val d = bld.create()
         d.setOnShowListener {
             d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { if (onOk()) d.dismiss() }
+            if (neutral != null) d.getButton(AlertDialog.BUTTON_NEUTRAL).apply {
+                setTextColor(C.RED)
+                setOnClickListener { onNeutral?.invoke(d) }
+            }
         }
         d.show()
         return d
@@ -325,17 +349,80 @@ abstract class BaseActivity : Activity() {
     }
 
     // ---------- shared edit dialogs ----------
-    fun editProduct(p: Product?, onSaved: (Long) -> Unit) {
-        val name = input("Maslan: Recetam 500mg", p?.name ?: "")
-        val pack = input("Maslan: 10x10 tablets", p?.pack ?: "", T.TEXT)
-        val price = input("Rs", p?.let { if (it.price > 0) Fmt.plain(it.price) else "" } ?: "", T.DEC)
-        val ind = input("Maslan: Epilepsy, Dementia", p?.indication ?: "", T.TEXT)
-        val body = form("Medicine ka naam" to name, "Pack size" to pack, "Trade price (ek pack ka)" to price, "Kis bimari ke liye" to ind)
-        formDialog(if (p == null) "Nayi medicine" else "Medicine edit", body) {
+    fun editBrand(b: Brand?, onSaved: (Long) -> Unit) {
+        val name = input("Maslan: Redep", b?.name ?: "")
+        val gen = input("Maslan: Sertraline HCl", b?.generic ?: "")
+        val cat = input("Maslan: Antidepressant", b?.category ?: "", T.TEXT)
+        val body = form("Brand ka naam" to name, "Generic / formula" to gen, "Category / kis bimari ke liye" to cat)
+        formDialog(if (b == null) "Naya product (brand)" else "Brand edit", body) {
             if (name.str().isEmpty()) { name.error = "Naam likho"; return@formDialog false }
-            val id = db.saveProduct(p?.id ?: 0, name.str(), pack.str(), price.str().toDoubleOrNull() ?: 0.0, ind.str())
+            val id = db.saveBrand(b?.id ?: 0, name.str(), gen.str(), cat.str())
             onSaved(id); true
         }
+    }
+
+    /** SKU = ek strength/pack. Per-unit price khud calculate ho jati hai (badal bhi sakte ho). */
+    fun editSku(brandId: Long, p: Product?, onSaved: () -> Unit) {
+        val strength = input("Maslan: 50mg ya 20mg/ml Solution", p?.strength ?: "", T.TEXT)
+        val pack = input("Maslan: 30 Tabs, 60ml", p?.pack ?: "", T.TEXT)
+        val price = input("Rs", p?.let { if (it.price > 0) Fmt.plain(it.price) else "" } ?: "", T.DEC)
+        val unit = input("Rs", p?.let { if (it.unitPrice > 0) Fmt.plain(it.unitPrice) else "" } ?: "", T.DEC)
+        val label = input("tab / cap / dose", p?.unitLabel ?: "tab", T.TEXT)
+        var unitTouched = p != null && p.unitPrice > 0
+        unit.onChange { if (unit.hasFocus()) unitTouched = true }
+        fun autoUnit() {
+            if (unitTouched) return
+            val n = Regex("(\\d+)").find(pack.str())?.value?.toIntOrNull() ?: return
+            val pr = price.str().toDoubleOrNull() ?: return
+            val lower = pack.str().lowercase()
+            if (n > 0 && !lower.contains("ml")) {
+                unit.setText(Fmt.plain(Math.round(pr / n * 100) / 100.0))
+                label.setText(if (lower.contains("cap")) "cap" else "tab")
+            }
+        }
+        price.onChange { autoUnit() }; pack.onChange { autoUnit() }
+        val body = form(
+            "Strength" to strength, "Pack" to pack, "Price (MRP / pack)" to price,
+            "Per tablet / per dose price" to unit, "Unit ka naam" to label
+        )
+        formDialog(if (p == null) "Naya SKU" else "SKU edit — ${p.name}", body, "Save",
+            if (p != null) "Delete" else null,
+            { dlg -> confirm("${p?.name} delete karna hai?", "Delete") { db.deleteProduct(p!!.id); dlg.dismiss(); onSaved() } }
+        ) {
+            if (strength.str().isEmpty() && pack.str().isEmpty()) { strength.error = "Strength likho"; return@formDialog false }
+            db.saveProduct(p?.id ?: 0, brandId, strength.str(), pack.str(),
+                price.str().toDoubleOrNull() ?: 0.0, unit.str().toDoubleOrNull() ?: 0.0, label.str())
+            onSaved(); true
+        }
+    }
+
+    /** SKU multi-select (brand ke hisaab se) */
+    fun pickSkus(title: String, prods: List<Product>, checked: BooleanArray, onDone: () -> Unit) {
+        AlertDialog.Builder(this).setTitle(title)
+            .setMultiChoiceItems(prods.map { it.label }.toTypedArray(), checked) { _, i, b -> checked[i] = b }
+            .setPositiveButton("OK") { _, _ -> onDone() }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    fun timeBtn(initial: String, hint: String, onSet: (String) -> Unit): TextView {
+        var value = initial
+        val b = btn(if (value.isBlank()) hint else value, 1, 14f) {}
+        b.setOnClickListener {
+            val c = java.util.Calendar.getInstance()
+            var h = 17; var m = 0
+            try {
+                val dt = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).parse(value)
+                if (dt != null) { c.time = dt; h = c.get(java.util.Calendar.HOUR_OF_DAY); m = c.get(java.util.Calendar.MINUTE) }
+            } catch (_: Exception) {}
+            android.app.TimePickerDialog(this, { _, hh, mm ->
+                val cal = java.util.Calendar.getInstance().apply {
+                    set(java.util.Calendar.HOUR_OF_DAY, hh); set(java.util.Calendar.MINUTE, mm)
+                }
+                value = Fmt.time(cal.timeInMillis); b.text = value; onSet(value)
+            }, h, m, false).show()
+        }
+        b.setOnLongClickListener { value = ""; b.text = hint; onSet(""); true }
+        return b
     }
 
     fun editStore(s: Store?, onSaved: (Store) -> Unit) {
@@ -359,6 +446,18 @@ abstract class BaseActivity : Activity() {
         val phone = input("03xx xxxxxxx", d?.phone ?: "", T.PHONE)
         val body = form("Doctor ka naam" to name, "Specialty" to spec, "Clinic / Hospital" to clinic, "Area / Shehar" to area, "Phone" to phone)
 
+        // ---- Timing ----
+        var tFrom = d?.timeFrom ?: ""
+        var tTo = d?.timeTo ?: ""
+        val days = input("Maslan: Mon–Sat, Friday off", d?.days ?: "", T.TEXT)
+        body.add(text("Clinic timing (kab se kab tak)", 13f, color = C.SUB), 14)
+        val tr = hrow()
+        tr.addWeighted(timeBtn(tFrom, "🕐 Kab se") { tFrom = it })
+        tr.addWeighted(timeBtn(tTo, "🕐 Kab tak") { tTo = it }, 8)
+        body.add(tr, 4)
+        body.add(text("Din", 13f, color = C.SUB), 10)
+        body.add(days)
+
         // ---- Products: already prescribing / promote ----
         val prods = db.products()
         val kinds = HashMap<Long, Int>(if (d != null) db.doctorProducts(d.id) else emptyMap())
@@ -373,16 +472,13 @@ abstract class BaseActivity : Activity() {
         fun choose(kind: Int) {
             if (prods.isEmpty()) { toast("Pehle Products mein medicines add karo"); return }
             val checked = BooleanArray(prods.size) { kinds[prods[it].id] == kind }
-            AlertDialog.Builder(this)
-                .setTitle(if (kind == 1) "Kaun si medicines already likh rahe hain?" else "Kaun si medicines promote karni hain?")
-                .setMultiChoiceItems(prods.map { it.name }.toTypedArray(), checked) { _, i, b -> checked[i] = b }
-                .setPositiveButton("OK") { _, _ ->
-                    prods.forEachIndexed { i, p ->
-                        if (checked[i]) kinds[p.id] = kind          // dusri list se khud hat jayegi
-                        else if (kinds[p.id] == kind) kinds.remove(p.id)
-                    }
-                    refreshBtns()
-                }.setNegativeButton("Cancel", null).show()
+            pickSkus(if (kind == 1) "Kaun si medicines already likh rahe hain?" else "Kaun si medicines promote karni hain?", prods, checked) {
+                prods.forEachIndexed { i, p ->
+                    if (checked[i]) kinds[p.id] = kind          // dusri list se khud hat jayegi
+                    else if (kinds[p.id] == kind) kinds.remove(p.id)
+                }
+                refreshBtns()
+            }
         }
         presBtn.setOnClickListener { choose(1) }
         promBtn.setOnClickListener { choose(2) }
@@ -395,11 +491,12 @@ abstract class BaseActivity : Activity() {
 
         formDialog(if (d == null) "Naya doctor" else "Doctor edit", body) {
             if (name.str().isEmpty()) { name.error = "Naam likho"; return@formDialog false }
-            val id = db.saveDoctor(d?.id ?: 0, name.str(), spec.str(), clinic.str(), area.str(), phone.str())
+            val id = db.saveDoctor(d?.id ?: 0, name.str(), spec.str(), clinic.str(), area.str(), phone.str(), tFrom, tTo, days.str())
             db.setDoctorProducts(id, kinds)
             onSaved(id); true
         }
     }
+
 
     /** List ki ek row: upar bold title, neeche chhoti lines, right par optional buttons */
     fun listRow(title: String, sub: String, sub2: String = "", right: View? = null, onClick: () -> Unit, onLong: (() -> Unit)? = null): LinearLayout {

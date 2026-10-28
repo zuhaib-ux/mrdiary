@@ -5,20 +5,40 @@ import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import java.io.File
 
-data class Product(
-    val id: Long, val name: String, val pack: String, val price: Double,
-    val indication: String, val script: String, val audio: String?
+/** Brand = ek medicine ka naam (maslan Redep). Literature, script aur voice brand ke saath hoti hai. */
+data class Brand(
+    val id: Long, val name: String, val generic: String, val category: String,
+    val script: String, val audio: String?
 )
 
-data class ProductImage(val id: Long, val productId: Long, val path: String)
+/** Product = brand ka ek SKU (maslan Redep 50mg, 30 tabs). Price SKU ki hoti hai. */
+data class Product(
+    val id: Long, val brandId: Long, val brandName: String, val strength: String, val pack: String,
+    val price: Double, val unitPrice: Double, val unitLabel: String
+) {
+    val name: String get() = "$brandName $strength".trim()
+    val label: String get() = if (pack.isBlank()) name else "$name ($pack)"
+    val unitText: String get() = if (unitPrice > 0) "${Fmt.rs(unitPrice)} / ${unitLabel.ifBlank { "unit" }}" else ""
+}
+
+data class BrandImage(val id: Long, val brandId: Long, val path: String)
 
 data class Store(val id: Long, val name: String, val owner: String, val phone: String, val area: String)
 
 data class Doctor(
     val id: Long, val name: String, val specialty: String, val clinic: String,
-    val area: String, val phone: String, val lastVisit: Long = 0
-)
+    val area: String, val phone: String, val timeFrom: String = "", val timeTo: String = "",
+    val days: String = "", val lastVisit: Long = 0
+) {
+    val timing: String get() = when {
+        timeFrom.isNotBlank() && timeTo.isNotBlank() -> "$timeFrom – $timeTo"
+        timeFrom.isNotBlank() -> "$timeFrom se"
+        timeTo.isNotBlank() -> "$timeTo tak"
+        else -> ""
+    }.let { t -> listOf(t, days).filter { it.isNotBlank() }.joinToString(" • ") }
+}
 
 data class Visit(
     val id: Long, val doctorId: Long, val date: Long, val products: String, val notes: String,
@@ -39,7 +59,7 @@ data class OrderItem(var productId: Long, var name: String, var qty: Int, var pr
 /** Report ke liye: naam, ginti, raqam */
 data class Agg(val name: String, val count: Double, val amount: Double)
 
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db", null, 2) {
+class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "mrdiary_v3.db", null, 1) {
 
     companion object {
         @Volatile private var inst: Db? = null
@@ -48,24 +68,19 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db",
     }
 
     override fun onCreate(d: SQLiteDatabase) {
-        d.execSQL("CREATE TABLE products(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, pack TEXT DEFAULT '', price REAL DEFAULT 0, indication TEXT DEFAULT '', script TEXT DEFAULT '', audio TEXT)")
-        d.execSQL("CREATE TABLE product_images(id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER, path TEXT, created INTEGER)")
+        d.execSQL("CREATE TABLE brands(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, generic TEXT DEFAULT '', category TEXT DEFAULT '', script TEXT DEFAULT '', audio TEXT, sort INTEGER DEFAULT 0)")
+        d.execSQL("CREATE TABLE brand_images(id INTEGER PRIMARY KEY AUTOINCREMENT, brand_id INTEGER, path TEXT, created INTEGER)")
+        d.execSQL("CREATE TABLE products(id INTEGER PRIMARY KEY AUTOINCREMENT, brand_id INTEGER, strength TEXT DEFAULT '', pack TEXT DEFAULT '', price REAL DEFAULT 0, unit_price REAL DEFAULT 0, unit_label TEXT DEFAULT '', sort INTEGER DEFAULT 0)")
         d.execSQL("CREATE TABLE stores(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, owner TEXT DEFAULT '', phone TEXT DEFAULT '', area TEXT DEFAULT '')")
         d.execSQL("CREATE TABLE orders(id INTEGER PRIMARY KEY AUTOINCREMENT, store_id INTEGER, store_name TEXT, date INTEGER, gross REAL, discount REAL, net REAL, note TEXT DEFAULT '')")
         d.execSQL("CREATE TABLE order_items(id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER, product_id INTEGER, name TEXT, qty INTEGER, price REAL, disc REAL)")
-        d.execSQL("CREATE TABLE doctors(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, specialty TEXT DEFAULT '', clinic TEXT DEFAULT '', area TEXT DEFAULT '', phone TEXT DEFAULT '')")
-        createDoctorProducts(d)
+        d.execSQL("CREATE TABLE doctors(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, specialty TEXT DEFAULT '', clinic TEXT DEFAULT '', area TEXT DEFAULT '', phone TEXT DEFAULT '', time_from TEXT DEFAULT '', time_to TEXT DEFAULT '', days TEXT DEFAULT '')")
+        d.execSQL("CREATE TABLE doctor_products(doctor_id INTEGER, product_id INTEGER, kind INTEGER, PRIMARY KEY(doctor_id, product_id))")
         d.execSQL("CREATE TABLE visits(id INTEGER PRIMARY KEY AUTOINCREMENT, doctor_id INTEGER, date INTEGER, products TEXT DEFAULT '', notes TEXT DEFAULT '', followup INTEGER DEFAULT 0, follow_done INTEGER DEFAULT 0)")
+        Seed.run(app, d)
     }
 
-    override fun onUpgrade(d: SQLiteDatabase, old: Int, new: Int) {
-        if (old < 2) createDoctorProducts(d)
-    }
-
-    /** kind 1 = already prescribe kar rahe, kind 2 = promote karna hai */
-    private fun createDoctorProducts(d: SQLiteDatabase) {
-        d.execSQL("CREATE TABLE IF NOT EXISTS doctor_products(doctor_id INTEGER, product_id INTEGER, kind INTEGER, PRIMARY KEY(doctor_id, product_id))")
-    }
+    override fun onUpgrade(d: SQLiteDatabase, old: Int, new: Int) {}
 
     // ---------- helpers ----------
     private fun cv(vararg p: Pair<String, Any?>) = ContentValues().apply {
@@ -106,33 +121,58 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db",
         writableDatabase.delete(table, where, args.map { it.toString() }.toTypedArray())
     }
 
-    // ---------- products ----------
-    private fun Cursor.toProduct() = Product(l("id"), s("name"), s("pack"), d("price"), s("indication"), s("script"), sn("audio"))
+    // ---------- brands ----------
+    private fun Cursor.toBrand() = Brand(l("id"), s("name"), s("generic"), s("category"), s("script"), sn("audio"))
 
-    fun products(): List<Product> = q("SELECT * FROM products ORDER BY name COLLATE NOCASE") { it.toProduct() }
-    fun product(id: Long): Product? = q("SELECT * FROM products WHERE id=?", id) { it.toProduct() }.firstOrNull()
+    fun brands(): List<Brand> = q("SELECT * FROM brands ORDER BY sort, name COLLATE NOCASE") { it.toBrand() }
+    fun brand(id: Long): Brand? = q("SELECT * FROM brands WHERE id=?", id) { it.toBrand() }.firstOrNull()
 
-    fun saveProduct(id: Long, name: String, pack: String, price: Double, indication: String): Long =
-        upsert("products", id, cv("name" to name, "pack" to pack, "price" to price, "indication" to indication))
+    fun saveBrand(id: Long, name: String, generic: String, category: String): Long {
+        val v = cv("name" to name, "generic" to generic, "category" to category)
+        if (id == 0L) v.put("sort", 1000)
+        return upsert("brands", id, v)
+    }
 
-    fun setScript(id: Long, script: String) = upsert("products", id, cv("script" to script))
-    fun setAudio(id: Long, path: String?) = upsert("products", id, cv("audio" to path))
+    fun setScript(id: Long, script: String) = upsert("brands", id, cv("script" to script))
+    fun setAudio(id: Long, path: String?) = upsert("brands", id, cv("audio" to path))
+
+    fun deleteBrand(id: Long) {
+        products(id).forEach { deleteProduct(it.id) }
+        del("brand_images", "brand_id=?", id)
+        del("brands", "id=?", id)
+    }
+
+    fun images(brandId: Long): List<BrandImage> =
+        q("SELECT * FROM brand_images WHERE brand_id=? ORDER BY id", brandId) {
+            BrandImage(it.l("id"), it.l("brand_id"), it.s("path"))
+        }
+
+    fun addImage(brandId: Long, path: String) =
+        upsert("brand_images", 0, cv("brand_id" to brandId, "path" to path, "created" to System.currentTimeMillis()))
+
+    fun deleteImage(id: Long) = del("brand_images", "id=?", id)
+
+    // ---------- products (SKUs) ----------
+    private val pSql = "SELECT p.*, b.name AS bname FROM products p JOIN brands b ON b.id=p.brand_id"
+    private fun Cursor.toProduct() = Product(
+        l("id"), l("brand_id"), s("bname"), s("strength"), s("pack"), d("price"), d("unit_price"), s("unit_label")
+    )
+
+    /** Saare SKUs, brand ke order mein */
+    fun products(): List<Product> = q("$pSql ORDER BY b.sort, b.name COLLATE NOCASE, p.sort, p.id") { it.toProduct() }
+    fun products(brandId: Long): List<Product> = q("$pSql WHERE p.brand_id=? ORDER BY p.sort, p.id", brandId) { it.toProduct() }
+    fun product(id: Long): Product? = q("$pSql WHERE p.id=?", id) { it.toProduct() }.firstOrNull()
+
+    fun saveProduct(id: Long, brandId: Long, strength: String, pack: String, price: Double, unitPrice: Double, unitLabel: String): Long =
+        upsert("products", id, cv(
+            "brand_id" to brandId, "strength" to strength, "pack" to pack,
+            "price" to price, "unit_price" to unitPrice, "unit_label" to unitLabel
+        ))
 
     fun deleteProduct(id: Long) {
         del("doctor_products", "product_id=?", id)
-        del("product_images", "product_id=?", id)
         del("products", "id=?", id)
     }
-
-    fun images(productId: Long): List<ProductImage> =
-        q("SELECT * FROM product_images WHERE product_id=? ORDER BY id", productId) {
-            ProductImage(it.l("id"), it.l("product_id"), it.s("path"))
-        }
-
-    fun addImage(productId: Long, path: String) =
-        upsert("product_images", 0, cv("product_id" to productId, "path" to path, "created" to System.currentTimeMillis()))
-
-    fun deleteImage(id: Long) = del("product_images", "id=?", id)
 
     // ---------- stores ----------
     private fun Cursor.toStore() = Store(l("id"), s("name"), s("owner"), s("phone"), s("area"))
@@ -148,6 +188,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db",
     // ---------- doctors ----------
     private fun Cursor.toDoctor() = Doctor(
         l("id"), s("name"), s("specialty"), s("clinic"), s("area"), s("phone"),
+        s("time_from"), s("time_to"), s("days"),
         if (getColumnIndex("last") >= 0) l("last") else 0
     )
 
@@ -157,8 +198,12 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db",
 
     fun doctor(id: Long): Doctor? = q("SELECT * FROM doctors WHERE id=?", id) { it.toDoctor() }.firstOrNull()
 
-    fun saveDoctor(id: Long, name: String, specialty: String, clinic: String, area: String, phone: String): Long =
-        upsert("doctors", id, cv("name" to name, "specialty" to specialty, "clinic" to clinic, "area" to area, "phone" to phone))
+    fun saveDoctor(id: Long, name: String, specialty: String, clinic: String, area: String, phone: String,
+                   timeFrom: String, timeTo: String, days: String): Long =
+        upsert("doctors", id, cv(
+            "name" to name, "specialty" to specialty, "clinic" to clinic, "area" to area, "phone" to phone,
+            "time_from" to timeFrom, "time_to" to timeTo, "days" to days
+        ))
 
     fun deleteDoctor(id: Long) {
         del("doctor_products", "doctor_id=?", id)
@@ -166,7 +211,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db",
         del("doctors", "id=?", id)
     }
 
-    /** product_id -> kind (1 prescribing, 2 promote) */
+    /** product_id -> kind (1 = already prescribe kar rahe, 2 = promote karna hai) */
     fun doctorProducts(doctorId: Long): Map<Long, Int> =
         q("SELECT product_id, kind FROM doctor_products WHERE doctor_id=?", doctorId) { it.l("product_id") to it.i("kind") }.toMap()
 
@@ -189,9 +234,9 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db",
         )
     }
 
-    fun removeDoctorProduct(doctorId: Long, productId: Long) = del("doctor_products", "doctor_id=? AND product_id=?", doctorId, productId)
+    fun removeDoctorProduct(doctorId: Long, productId: Long) =
+        del("doctor_products", "doctor_id=? AND product_id=?", doctorId, productId)
 
-    /** List ke liye: har doctor ke kitne prescribing / promote products */
     fun doctorProductCounts(): Map<Long, Pair<Int, Int>> {
         val out = HashMap<Long, Pair<Int, Int>>()
         q("SELECT doctor_id, SUM(kind=1) AS a, SUM(kind=2) AS b FROM doctor_products GROUP BY doctor_id") {
@@ -219,7 +264,6 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db",
     fun deleteVisit(id: Long) = del("visits", "id=?", id)
     fun setFollowDone(id: Long) = upsert("visits", id, cv("follow_done" to 1))
 
-    /** Woh follow-ups jo `until` tak ke hain aur abhi done nahi hue */
     fun dueFollowups(until: Long): List<Visit> = q(
         "SELECT v.*, d.name AS dname FROM visits v JOIN doctors d ON d.id=v.doctor_id " +
             "WHERE v.followup>0 AND v.followup<=? AND v.follow_done=0 ORDER BY v.followup", until
@@ -228,11 +272,6 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db",
     fun pendingFollowups(): List<Visit> = q(
         "SELECT v.*, d.name AS dname FROM visits v JOIN doctors d ON d.id=v.doctor_id " +
             "WHERE v.followup>0 AND v.follow_done=0 ORDER BY v.followup"
-    ) { it.toVisit() }
-
-    fun visitsBetween(from: Long, to: Long): List<Visit> = q(
-        "SELECT v.*, d.name AS dname FROM visits v JOIN doctors d ON d.id=v.doctor_id " +
-            "WHERE v.date BETWEEN ? AND ? ORDER BY v.date DESC", from, to
     ) { it.toVisit() }
 
     // ---------- orders ----------
@@ -287,8 +326,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db",
 
     // ---------- reports ----------
     fun orderTotals(from: Long, to: Long): Agg = q(
-        "SELECT COUNT(*) AS c, IFNULL(SUM(gross),0) AS g, IFNULL(SUM(discount),0) AS dsc, IFNULL(SUM(net),0) AS n FROM orders WHERE date BETWEEN ? AND ?",
-        from, to
+        "SELECT COUNT(*) AS c, IFNULL(SUM(net),0) AS n FROM orders WHERE date BETWEEN ? AND ?", from, to
     ) { Agg("", it.d("c"), it.d("n")) }.first()
 
     fun discountTotal(from: Long, to: Long): Double = q(
@@ -318,4 +356,90 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "mrdiary.db",
         "SELECT d.name AS name, COUNT(*) AS c FROM visits v JOIN doctors d ON d.id=v.doctor_id " +
             "WHERE v.date BETWEEN ? AND ? GROUP BY v.doctor_id, d.name ORDER BY c DESC", from, to
     ) { Agg(it.s("name"), it.d("c"), 0.0) }
+}
+
+// =====================================================================
+// Pehli baar app khulne par GeniX ki saari medicines + literature daal do
+// =====================================================================
+object Seed {
+    private class Sku(val strength: String, val pack: String, val price: Double, val unit: Double, val label: String)
+    private class B(val name: String, val generic: String, val cat: String, val images: List<String>, val skus: List<Sku>)
+
+    private val data = listOf(
+        B("Neram", "Alprazolam", "Anxiety (GAD)", listOf("neram"), listOf(
+            Sku("0.5mg", "30 Tabs", 300.0, 10.0, "tab"))),
+        B("Lalap", "Lacosamide", "Antiepileptic", listOf("lalap_1", "lalap_2"), listOf(
+            Sku("200mg", "14 Tabs", 1400.0, 100.0, "tab"),
+            Sku("10mg/ml Syrup", "100ml", 664.0, 0.0, "dose"))),
+        B("Recetam", "Levetiracetam", "Antiepileptic", listOf("recetam"), listOf(
+            Sku("250mg", "10 Tabs", 400.0, 40.0, "tab"),
+            Sku("500mg", "10 Tabs", 630.0, 63.0, "tab"),
+            Sku("100mg/ml Solution", "60ml", 540.0, 0.0, "dose"),
+            Sku("500mg/5ml I.V Infusion", "1 Vial", 450.0, 0.0, "dose"))),
+        B("Olagen Plus", "Olanzapine / Fluoxetine", "Antidepressant", listOf("olagen_plus"), listOf(
+            Sku("3/25mg", "30 Caps", 630.0, 21.0, "cap"),
+            Sku("6/25mg", "30 Caps", 730.0, 24.0, "cap"))),
+        B("Olagen ODT", "Olanzapine", "Antipsychotic", listOf("olagen_odt"), listOf(
+            Sku("5mg", "10 Tabs", 235.0, 23.0, "tab"),
+            Sku("10mg", "10 Tabs", 320.0, 32.0, "tab"))),
+        B("Redep", "Sertraline HCl", "Antidepressant", listOf("redep_tablets", "redep_solution"), listOf(
+            Sku("50mg", "30 Tabs", 1080.0, 36.0, "tab"),
+            Sku("100mg", "20 Tabs", 1200.0, 60.0, "tab"),
+            Sku("20mg/ml Solution", "50ml", 600.0, 30.0, "dose"))),
+        B("Ilodon", "Iloperidone", "Antipsychotic", listOf(), listOf(
+            Sku("2mg", "10 Tabs", 250.0, 25.0, "tab"),
+            Sku("4mg", "10 Tabs", 400.0, 40.0, "tab"))),
+        B("Zacloz", "Clozapine", "Antipsychotic", listOf("zacloz"), listOf(
+            Sku("25mg", "50 Tabs", 1250.0, 25.0, "tab"),
+            Sku("100mg", "50 Tabs", 2500.0, 50.0, "tab"),
+            Sku("50mg/ml Suspension", "60ml", 1400.0, 0.0, "dose"))),
+        B("Riveme", "Rivastigmine Tartrate", "Alzheimer's / Dementia", listOf("riveme"), listOf(
+            Sku("1.5mg", "60 Caps", 4250.0, 71.0, "cap"),
+            Sku("3mg", "60 Caps", 5100.0, 85.0, "cap"),
+            Sku("2mg/ml Solution", "60ml", 800.0, 0.0, "dose"))),
+        B("Memor", "Ginkgo + Bacopa + Huperzia (10 ingredients)", "Brain energizer", listOf("memor"), listOf(
+            Sku("", "30 Caps", 750.0, 25.0, "cap"))),
+        B("Caripz", "Cariprazine", "Antipsychotic", listOf("caripz"), listOf(
+            Sku("1.5mg", "10 Caps", 300.0, 30.0, "cap"),
+            Sku("3mg", "10 Caps", 450.0, 45.0, "cap"),
+            Sku("4.5mg", "10 Caps", 650.0, 65.0, "cap"),
+            Sku("6mg", "10 Caps", 850.0, 85.0, "cap"))),
+        B("Tadlif", "Tadalafil", "Antidepressant / Men's health", listOf("tadlif"), listOf(
+            Sku("20mg", "8 Tabs", 560.0, 70.0, "tab"))),
+    )
+
+    fun run(ctx: Context, d: SQLiteDatabase) {
+        val dir = File(ctx.filesDir, "images").apply { mkdirs() }
+        data.forEachIndexed { bi, b ->
+            val bid = d.insert("brands", null, ContentValues().apply {
+                put("name", b.name); put("generic", b.generic); put("category", b.cat); put("sort", bi)
+            })
+            b.images.forEach { img ->
+                val f = File(dir, "lit_$img.jpg")
+                if (copyAsset(ctx, "lit/$img.jpg", f)) d.insert("brand_images", null, ContentValues().apply {
+                    put("brand_id", bid); put("path", f.absolutePath); put("created", System.currentTimeMillis())
+                })
+            }
+            b.skus.forEachIndexed { si, s ->
+                d.insert("products", null, ContentValues().apply {
+                    put("brand_id", bid); put("strength", s.strength); put("pack", s.pack)
+                    put("price", s.price); put("unit_price", s.unit); put("unit_label", s.label); put("sort", si)
+                })
+            }
+        }
+    }
+
+    fun copyAsset(ctx: Context, asset: String, out: File): Boolean = try {
+        if (!out.exists()) ctx.assets.open(asset).use { i -> out.outputStream().use { i.copyTo(it) } }
+        true
+    } catch (e: Exception) { false }
+
+    /** Price list aur portfolio ki reference images */
+    fun refImages(ctx: Context): Array<String> {
+        val dir = File(ctx.filesDir, "images").apply { mkdirs() }
+        return listOf("price_list", "portfolio").mapNotNull { n ->
+            val f = File(dir, "ref_$n.jpg")
+            if (copyAsset(ctx, "lit/$n.jpg", f)) f.absolutePath else null
+        }.toTypedArray()
+    }
 }
