@@ -318,6 +318,40 @@ abstract class BaseActivity : Activity() {
         }
     }
 
+    // ---------- awaaz se likhna ----------
+    private var voiceTarget: EditText? = null
+
+    /** Google ki speech-to-text: jo bolo woh EditText mein likh jaye */
+    fun voiceInto(target: EditText, lang: String) {
+        voiceTarget = target
+        val i = Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, lang)
+            putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Boliye… (visit ke notes)")
+        }
+        try { startActivityForResult(i, 991) }
+        catch (e: Exception) { toast("Is phone par voice typing nahi mili (Google app chahiye)") }
+    }
+
+    /** Notes ke neeche 🎤 Urdu / 🎤 English buttons */
+    fun voiceRow(target: EditText): LinearLayout = hrow().apply {
+        addWeighted(btn("🎤 Urdu mein bolo", 3, 13f) { voiceInto(target, "ur-PK") })
+        addWeighted(btn("🎤 English", 3, 13f) { voiceInto(target, "en-US") }, 6)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(rc: Int, result: Int, data: Intent?) {
+        @Suppress("DEPRECATION") super.onActivityResult(rc, result, data)
+        if (rc == 991 && result == RESULT_OK) {
+            val said = data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: return
+            voiceTarget?.let { t ->
+                val cur = t.text.toString().trim()
+                t.setText(if (cur.isEmpty()) said else "$cur. $said")
+                t.setSelection(t.text.length)
+            }
+        }
+    }
+
     override fun onRequestPermissionsResult(rc: Int, perms: Array<out String>, res: IntArray) {
         super.onRequestPermissionsResult(rc, perms, res)
         if (rc == 77) {
@@ -460,14 +494,43 @@ abstract class BaseActivity : Activity() {
         // ---- Timing ----
         var tFrom = d?.timeFrom ?: ""
         var tTo = d?.timeTo ?: ""
-        val days = input("Maslan: Mon–Sat, Friday off", d?.days ?: "", T.TEXT)
+        val dayChecked = BooleanArray(7) { Days.ALL[it] in (d?.dayList ?: emptyList()) }
+        fun daysLabel(): String {
+            val sel = Days.ALL.filterIndexed { i, _ -> dayChecked[i] }
+            return "📅 " + (if (sel.isEmpty()) "Kaun se din baithte hain? ▾" else Days.text(sel) + " ▾")
+        }
+        val daysBtn = btn(daysLabel(), 1, 14f) {}
+        daysBtn.setOnClickListener {
+            AlertDialog.Builder(this).setTitle("Kin dinon mein baithte hain?")
+                .setMultiChoiceItems(Days.ALL.mapIndexed { i, x -> "$x  (${Days.URDU[i]})" }.toTypedArray(), dayChecked) { _, i, b -> dayChecked[i] = b }
+                .setPositiveButton("OK") { _, _ -> daysBtn.text = daysLabel() }
+                .setNeutralButton("Mon–Sat") { _, _ -> for (i in 0 until 7) dayChecked[i] = i < 6; daysBtn.text = daysLabel() }
+                .show()
+        }
         body.add(text("Clinic timing (kab se kab tak)", 13f, color = C.SUB), 14)
         val tr = hrow()
         tr.addWeighted(timeBtn(tFrom, "🕐 Kab se") { tFrom = it })
         tr.addWeighted(timeBtn(tTo, "🕐 Kab tak") { tTo = it }, 8)
         body.add(tr, 4)
-        body.add(text("Din", 13f, color = C.SUB), 10)
-        body.add(days)
+        body.add(daysBtn, 8)
+
+        // ---- Category ----
+        var cat = d?.category ?: "B"
+        body.add(text("Category (kitni dafa milna hai)", 13f, color = C.SUB), 14)
+        val catRow = hrow()
+        val catOpts = listOf("A" to "A • har hafte", "B" to "B • 15 din", "C" to "C • mahina")
+        val catViews = ArrayList<TextView>()
+        fun paintCats() = catViews.forEachIndexed { i, v ->
+            val sel = catOpts[i].first == cat
+            v.setTextColor(if (sel) Color.WHITE else C.TEXT)
+            v.background = rounded(if (sel) C.PRIMARY else Color.WHITE, 18f, if (sel) 0 else C.BORDER)
+        }
+        catOpts.forEach { (k, l) ->
+            val v = chip(l, false) { cat = k; paintCats() }
+            catViews.add(v); catRow.addWeighted(v, 6)
+        }
+        paintCats()
+        body.add(catRow, 4)
 
         // ---- Products: already prescribing / promote ----
         val prods = db.products()
@@ -502,7 +565,8 @@ abstract class BaseActivity : Activity() {
 
         formDialog(if (d == null) "Naya doctor" else "Doctor edit", body) {
             if (name.str().isEmpty()) { name.error = "Naam likho"; return@formDialog false }
-            val id = db.saveDoctor(d?.id ?: 0, name.str(), spec.str(), clinic.str(), area.str(), phone.str(), tFrom, tTo, days.str())
+            val id = db.saveDoctor(d?.id ?: 0, name.str(), spec.str(), clinic.str(), area.str(), phone.str(), tFrom, tTo,
+                Days.ALL.filterIndexed { i, _ -> dayChecked[i] }.joinToString(","), cat)
             db.setDoctorProducts(id, kinds)
             onSaved(id); true
         }

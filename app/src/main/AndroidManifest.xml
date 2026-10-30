@@ -15,6 +15,12 @@
         <intent>
             <action android:name="android.media.action.IMAGE_CAPTURE" />
         </intent>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
     </queries>
 
     <application
@@ -41,6 +47,10 @@
         <activity android:name=".DoctorDetailActivity" />
         <activity android:name=".ReportActivity" />
         <activity android:name=".DetailingActivity" />
+        <activity android:name=".PlanActivity" />
+        <activity android:name=".OverdueActivity" />
+        <activity android:name=".InvoiceListActivity" />
+        <activity android:name=".ExpenseActivity" />
 
         <provider
             android:name=".FilesProvider"
@@ -49,6 +59,7 @@
             android:grantUriPermissions="true" />
 
         <receiver android:name=".FollowupReceiver" android:exported="false" />
+        <receiver android:name=".MorningReceiver" android:exported="false" />
         <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

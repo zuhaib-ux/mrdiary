@@ -191,5 +191,6 @@ class FollowupReceiver : BroadcastReceiver() {
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
         Followups.rescheduleAll(ctx)
+        Morning.schedule(ctx)
     }
 }

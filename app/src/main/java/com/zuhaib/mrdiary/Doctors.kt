@@ -46,7 +46,13 @@ class DoctorListActivity : BaseActivity() {
         list.forEach { d ->
             val c = counts[d.id]
             val pc = if (c != null && (c.first + c.second) > 0) "✅ ${c.first}  🎯 ${c.second}  •  " else ""
-            val last = pc + if (d.lastVisit > 0) "Last visit: ${Fmt.date(d.lastVisit)}" else "Abhi visit nahi hui"
+            val ds = d.daysSince()
+            val last = pc + "[${d.category}] " + when {
+                ds < 0 -> "⚠ Abhi visit nahi hui"
+                ds >= d.cycleDays -> "⚠ $ds din se nahi mile"
+                ds == 0 -> "✓ Aaj mile"
+                else -> "Last visit: $ds din pehle"
+            }
             listBox.add(
                 listRow(
                     d.name,
@@ -193,6 +199,7 @@ class DoctorDetailActivity : BaseActivity() {
         body.add(prodIn, 4)
         body.add(text("Notes", 13f, color = C.SUB), 12)
         body.add(notes)
+        body.add(voiceRow(notes), 4)
         body.add(text("Dobara kab milna hai?", 13f, color = C.SUB), 12)
         body.add(followBtn, 4)
 

@@ -90,6 +90,9 @@ class DetailingActivity : BaseActivity() {
         head.add(hr, 10)
         content.add(head)
 
+        // ---- Pre-call brief: andar jaane se pehle ----
+        if (page == 0) content.add(brief(d), 10)
+
         if (pages.isEmpty()) {
             content.add(empty("Is doctor ke saath abhi koi product nahi. Doctor edit karke \"Prescribe kar rahe\" aur \"Promote karna hai\" mein medicines chuno."), 12)
             content.add(btn("✏ Products chuno") { editDoctor(d) { refresh() } }, 6)
@@ -173,5 +176,35 @@ class DetailingActivity : BaseActivity() {
         content.add(text("Left / right swipe karke bhi product badal sakte ho", 12f, color = C.SUB).apply {
             gravity = android.view.Gravity.CENTER; setPadding(0, dp(6), 0, 0)
         })
+    }
+
+    private fun brief(d: Doctor): LinearLayout {
+        val c = card()
+        val ds = d.daysSince()
+        val head = hrow()
+        head.addView(text("📝 Andar jaane se pehle", 15f, true, C.PRIMARY_DARK), LinearLayout.LayoutParams(0, WRAP, 1f))
+        head.addView(text(" ${d.category} ", 13f, true, Color.WHITE).apply {
+            background = rounded(if (d.isOverdue()) C.ORANGE else C.PRIMARY, 8f); setPadding(dp(8), dp(2), dp(8), dp(2))
+        })
+        c.add(head)
+        val lv = db.lastVisit(d.id)
+        if (lv == null) {
+            c.add(text("Pehli visit hai. Apna taaruf aur company ki line se shuru karo.", 14f, color = C.SUB), 6)
+        } else {
+            c.add(text("Pichli visit: ${Fmt.date(lv.date)} (${if (ds == 0) "aaj" else "$ds din pehle"})", 14f, true), 6)
+            if (lv.products.isNotBlank()) c.add(text("💊 Detail kiya tha: ${lv.products}", 14f), 4)
+            if (lv.notes.isNotBlank()) c.add(text("🗣 ${lv.notes}", 14f, color = C.TEXT).apply {
+                background = rounded(0xFFFFF8E1.toInt(), 8f); setPadding(dp(10), dp(6), dp(10), dp(6))
+            }, 6)
+            if (lv.followup > 0 && !lv.followDone) c.add(text("🔔 Follow-up tha: ${Fmt.date(lv.followup)}", 13.5f, true, C.ORANGE), 6)
+        }
+        if (d.isOverdue() && ds > 0) c.add(text("⚠ $ds din ho gaye (category ${d.category}: har ${d.cycleDays} din milna hai)", 13f, true, C.ORANGE), 6)
+        val kinds = db.doctorProducts(d.id)
+        val prods = db.products()
+        val pres = prods.filter { kinds[it.id] == 1 }.joinToString(", ") { it.name }
+        val prom = prods.filter { kinds[it.id] == 2 }.joinToString(", ") { it.name }
+        if (pres.isNotBlank()) c.add(text("✅ Likh rahe hain: $pres", 13.5f, color = C.PRIMARY), 6)
+        if (prom.isNotBlank()) c.add(text("🎯 Aaj ye detail karo: $prom", 13.5f, true, C.ORANGE), 4)
+        return c
     }
 }

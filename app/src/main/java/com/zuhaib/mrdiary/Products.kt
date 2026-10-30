@@ -366,6 +366,7 @@ class ProductDetailActivity : BaseActivity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(rc: Int, result: Int, data: Intent?) {
         super.onActivityResult(rc, result, data)
+        if (rc != RC_CAMERA && rc != RC_GALLERY) return
         if (result != Activity.RESULT_OK) return
         var added = 0
         if (rc == RC_CAMERA) {

@@ -32,15 +32,71 @@ data class Store(val id: Long, val name: String, val owner: String, val phone: S
 data class Doctor(
     val id: Long, val name: String, val specialty: String, val clinic: String,
     val area: String, val phone: String, val timeFrom: String = "", val timeTo: String = "",
-    val days: String = "", val lastVisit: Long = 0
+    val days: String = "", val lastVisit: Long = 0, val category: String = "B"
 ) {
+    val dayList: List<String> get() = Days.parse(days)
+    val daysText: String get() = Days.text(dayList)
     val timing: String get() = when {
         timeFrom.isNotBlank() && timeTo.isNotBlank() -> "$timeFrom – $timeTo"
         timeFrom.isNotBlank() -> "$timeFrom se"
         timeTo.isNotBlank() -> "$timeTo tak"
         else -> ""
-    }.let { t -> listOf(t, days).filter { it.isNotBlank() }.joinToString(" • ") }
+    }.let { t -> listOf(t, daysText).filter { it.isNotBlank() }.joinToString(" • ") }
+
+    /** Din khali hon to har din maan lo */
+    fun sitsOn(day: String): Boolean = dayList.isEmpty() || dayList.contains(day)
+
+    /** A = har hafte, B = 15 din, C = mahina */
+    val cycleDays: Int get() = when (category) { "A" -> 7; "C" -> 30; else -> 15 }
+
+    /** Kitne din se nahi mile (-1 = kabhi nahi) */
+    fun daysSince(now: Long = System.currentTimeMillis()): Int =
+        if (lastVisit <= 0) -1 else ((Range.dayStart(now) - Range.dayStart(lastVisit)) / 86_400_000L).toInt()
+
+    fun isOverdue(): Boolean { val d = daysSince(); return d < 0 || d >= cycleDays }
+
+    /** Clinic timing minutes mein, sort ke liye */
+    val startMinutes: Int get() = Days.minutes(timeFrom)
 }
+
+object Days {
+    val ALL = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    val URDU = listOf("Peer", "Mangal", "Budh", "Jumerat", "Juma", "Hafta", "Itwar")
+
+    fun today(): String = ALL[(java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_WEEK) + 5) % 7]
+
+    fun parse(s: String): List<String> {
+        val low = s.lowercase()
+        if (low.isBlank()) return emptyList()
+        if (low.contains("daily") || low.contains("rozana") || low.contains("roz")) return ALL
+        return ALL.filter { low.contains(it.lowercase()) }
+    }
+
+    fun text(d: List<String>): String = when {
+        d.isEmpty() -> ""
+        d.size == 7 -> "Rozana"
+        d == ALL.take(6) -> "Mon–Sat"
+        d == ALL.take(5) -> "Mon–Fri"
+        d.size == 6 -> "${ALL.first { it !in d }} off"
+        else -> d.joinToString(", ")
+    }
+
+    fun minutes(t: String): Int = try {
+        val c = java.util.Calendar.getInstance()
+        c.time = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).parse(t.trim())!!
+        c.get(java.util.Calendar.HOUR_OF_DAY) * 60 + c.get(java.util.Calendar.MINUTE)
+    } catch (e: Exception) { 24 * 60 }
+}
+
+data class SupplierInvoice(
+    val id: Long, val storeId: Long, val storeName: String, val date: Long,
+    val invNo: String, val amount: Double, val photo: String?, val note: String
+)
+
+data class Expense(
+    val id: Long, val date: Long, val type: String, val amount: Double,
+    val kmStart: Double, val kmEnd: Double, val note: String
+) { val km: Double get() = if (kmEnd > kmStart && kmStart > 0) kmEnd - kmStart else 0.0 }
 
 data class Visit(
     val id: Long, val doctorId: Long, val date: Long, val products: String, val notes: String,
@@ -61,7 +117,7 @@ data class OrderItem(var productId: Long, var name: String, var qty: Int, var pr
 /** Report ke liye: naam, ginti, raqam */
 data class Agg(val name: String, val count: Double, val amount: Double)
 
-class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "mrdiary_v3.db", null, 2) {
+class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "mrdiary_v3.db", null, 3) {
 
     companion object {
         @Volatile private var inst: Db? = null
@@ -79,6 +135,7 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         d.execSQL("CREATE TABLE doctors(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, specialty TEXT DEFAULT '', clinic TEXT DEFAULT '', area TEXT DEFAULT '', phone TEXT DEFAULT '', time_from TEXT DEFAULT '', time_to TEXT DEFAULT '', days TEXT DEFAULT '')")
         d.execSQL("CREATE TABLE doctor_products(doctor_id INTEGER, product_id INTEGER, kind INTEGER, PRIMARY KEY(doctor_id, product_id))")
         d.execSQL("CREATE TABLE visits(id INTEGER PRIMARY KEY AUTOINCREMENT, doctor_id INTEGER, date INTEGER, products TEXT DEFAULT '', notes TEXT DEFAULT '', followup INTEGER DEFAULT 0, follow_done INTEGER DEFAULT 0)")
+        v3(d)
         Seed.run(app, d)
     }
 
@@ -87,6 +144,14 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
             d.execSQL("ALTER TABLE products ADD COLUMN tp REAL DEFAULT 0")
             Seed.applyPrices(d)
         }
+        if (old < 3) v3(d)
+    }
+
+    /** v3: doctor category, supplier invoices, TA/DA */
+    private fun v3(d: SQLiteDatabase) {
+        d.execSQL("ALTER TABLE doctors ADD COLUMN category TEXT DEFAULT 'B'")
+        d.execSQL("CREATE TABLE IF NOT EXISTS invoices(id INTEGER PRIMARY KEY AUTOINCREMENT, store_id INTEGER, store_name TEXT, date INTEGER, inv_no TEXT DEFAULT '', amount REAL DEFAULT 0, photo TEXT, note TEXT DEFAULT '')")
+        d.execSQL("CREATE TABLE IF NOT EXISTS expenses(id INTEGER PRIMARY KEY AUTOINCREMENT, date INTEGER, type TEXT, amount REAL DEFAULT 0, km_start REAL DEFAULT 0, km_end REAL DEFAULT 0, note TEXT DEFAULT '')")
     }
 
     // ---------- helpers ----------
@@ -196,20 +261,23 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
     private fun Cursor.toDoctor() = Doctor(
         l("id"), s("name"), s("specialty"), s("clinic"), s("area"), s("phone"),
         s("time_from"), s("time_to"), s("days"),
-        if (getColumnIndex("last") >= 0) l("last") else 0
+        if (getColumnIndex("last") >= 0) l("last") else 0,
+        s("category").ifBlank { "B" }
     )
 
     fun doctors(): List<Doctor> = q(
         "SELECT d.*, IFNULL((SELECT MAX(date) FROM visits v WHERE v.doctor_id=d.id),0) AS last FROM doctors d ORDER BY d.name COLLATE NOCASE"
     ) { it.toDoctor() }
 
-    fun doctor(id: Long): Doctor? = q("SELECT * FROM doctors WHERE id=?", id) { it.toDoctor() }.firstOrNull()
+    fun doctor(id: Long): Doctor? = q(
+        "SELECT d.*, IFNULL((SELECT MAX(date) FROM visits v WHERE v.doctor_id=d.id),0) AS last FROM doctors d WHERE d.id=?", id
+    ) { it.toDoctor() }.firstOrNull()
 
     fun saveDoctor(id: Long, name: String, specialty: String, clinic: String, area: String, phone: String,
-                   timeFrom: String, timeTo: String, days: String): Long =
+                   timeFrom: String, timeTo: String, days: String, category: String): Long =
         upsert("doctors", id, cv(
             "name" to name, "specialty" to specialty, "clinic" to clinic, "area" to area, "phone" to phone,
-            "time_from" to timeFrom, "time_to" to timeTo, "days" to days
+            "time_from" to timeFrom, "time_to" to timeTo, "days" to days, "category" to category
         ))
 
     fun deleteDoctor(id: Long) {
@@ -267,6 +335,19 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
 
     fun addVisit(doctorId: Long, date: Long, products: String, notes: String, followup: Long): Long =
         upsert("visits", 0, cv("doctor_id" to doctorId, "date" to date, "products" to products, "notes" to notes, "followup" to followup, "follow_done" to 0))
+
+    fun lastVisit(doctorId: Long): Visit? =
+        q("SELECT * FROM visits WHERE doctor_id=? ORDER BY date DESC LIMIT 1", doctorId) { it.toVisit() }.firstOrNull()
+
+    fun visitsBetween(from: Long, to: Long): List<Visit> = q(
+        "SELECT v.*, d.name AS dname FROM visits v JOIN doctors d ON d.id=v.doctor_id " +
+            "WHERE v.date BETWEEN ? AND ? ORDER BY v.date", from, to
+    ) { it.toVisit() }
+
+    fun followupsBetween(from: Long, to: Long): List<Visit> = q(
+        "SELECT v.*, d.name AS dname FROM visits v JOIN doctors d ON d.id=v.doctor_id " +
+            "WHERE v.followup BETWEEN ? AND ? AND v.follow_done=0 ORDER BY v.followup", from, to
+    ) { it.toVisit() }
 
     fun deleteVisit(id: Long) = del("visits", "id=?", id)
     fun setFollowDone(id: Long) = upsert("visits", id, cv("follow_done" to 1))
@@ -330,6 +411,45 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         del("order_items", "order_id=?", id)
         del("orders", "id=?", id)
     }
+
+    // ---------- supplier invoices ----------
+    private fun Cursor.toInv() = SupplierInvoice(
+        l("id"), l("store_id"), s("store_name"), l("date"), s("inv_no"), d("amount"), sn("photo"), s("note")
+    )
+
+    fun invoices(from: Long, to: Long): List<SupplierInvoice> =
+        q("SELECT * FROM invoices WHERE date BETWEEN ? AND ? ORDER BY date DESC, id DESC", from, to) { it.toInv() }
+
+    fun saveInvoice(i: SupplierInvoice): Long = upsert("invoices", i.id, cv(
+        "store_id" to i.storeId, "store_name" to i.storeName, "date" to i.date, "inv_no" to i.invNo,
+        "amount" to i.amount, "photo" to i.photo, "note" to i.note
+    ))
+
+    fun deleteInvoice(id: Long) = del("invoices", "id=?", id)
+
+    /** store_id -> purchase dates (orders + supplier invoices), reorder andaze ke liye */
+    fun purchaseDates(): Map<Long, List<Long>> {
+        val m = HashMap<Long, MutableList<Long>>()
+        q("SELECT store_id AS s, date AS d FROM orders WHERE store_id>0 UNION ALL SELECT store_id AS s, date AS d FROM invoices WHERE store_id>0") {
+            m.getOrPut(it.l("s")) { mutableListOf() }.add(it.l("d"))
+        }
+        return m
+    }
+
+    // ---------- TA/DA ----------
+    private fun Cursor.toExp() = Expense(l("id"), l("date"), s("type"), d("amount"), d("km_start"), d("km_end"), s("note"))
+
+    fun expenses(from: Long, to: Long): List<Expense> =
+        q("SELECT * FROM expenses WHERE date BETWEEN ? AND ? ORDER BY date DESC, id DESC", from, to) { it.toExp() }
+
+    fun lastKm(): Double = q("SELECT MAX(km_end) AS k FROM expenses") { it.d("k") }.firstOrNull() ?: 0.0
+
+    fun saveExpense(e: Expense): Long = upsert("expenses", e.id, cv(
+        "date" to e.date, "type" to e.type, "amount" to e.amount,
+        "km_start" to e.kmStart, "km_end" to e.kmEnd, "note" to e.note
+    ))
+
+    fun deleteExpense(id: Long) = del("expenses", "id=?", id)
 
     // ---------- reports ----------
     fun orderTotals(from: Long, to: Long): Agg = q(

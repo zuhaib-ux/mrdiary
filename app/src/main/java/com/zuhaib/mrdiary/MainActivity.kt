@@ -15,6 +15,7 @@ class MainActivity : BaseActivity() {
         super.onCreate(savedInstanceState)
         title = "MR Diary"
         Followups.channel(this)
+        Morning.schedule(this)
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 5)
@@ -42,14 +43,22 @@ class MainActivity : BaseActivity() {
         head.add(text("Is mahine: ${month.count.toInt()} orders • ${Fmt.rs(month.amount)}", 13.5f, color = 0xE6FFFFFF.toInt()), 12)
         content.add(head)
 
+        head.add(btn("📤 Aaj ki report bhejo", 3, 14f) { shareText(DailyReport.build(this)) }, 12)
+
         // ---- Tiles ----
+        val docs = db.doctors()
+        val overdue = docs.count { it.isOverdue() }
         val tiles = listOf(
-            Triple("💊", "Products", "Literature, script, voice") to { open(ProductListActivity::class.java) },
+            Triple("📅", "Aaj ka plan", "Area, timing, stores") to { open(PlanActivity::class.java) },
+            Triple("⏰", "Overdue ($overdue)", "Kaafi din se nahi mile") to { open(OverdueActivity::class.java) },
+            Triple("👨‍⚕️", "Doctors", "Literature, visits") to { open(DoctorListActivity::class.java) },
             Triple("🧾", "Naya Order", "Store ka order likho") to { open(OrderEditActivity::class.java) },
-            Triple("👨‍⚕️", "Doctors", "Call, visits, follow-up") to { open(DoctorListActivity::class.java) },
-            Triple("🏪", "Stores", "Medical stores ki list") to { open(StoreListActivity::class.java) },
+            Triple("💊", "Products", "Literature, price") to { open(ProductListActivity::class.java) },
+            Triple("🏪", "Stores", "Medical stores") to { open(StoreListActivity::class.java) },
+            Triple("📄", "Supplier invoices", "Secondary sale") to { open(InvoiceListActivity::class.java) },
+            Triple("⛽", "TA / DA", "Kharcha aur km") to { open(ExpenseActivity::class.java) },
             Triple("📋", "Orders", "Purane orders") to { open(OrderListActivity::class.java) },
-            Triple("📊", "Reports", "Din / mahine ka hisaab") to { open(ReportActivity::class.java) },
+            Triple("📊", "Reports", "Din / mahine") to { open(ReportActivity::class.java) },
         )
         tiles.chunked(2).forEach { pair ->
             val row = hrow()
@@ -60,7 +69,7 @@ class MainActivity : BaseActivity() {
         // ---- Follow-ups ----
         val due = db.dueFollowups(dE)
         section("🔔 Aaj ke follow-ups (${due.size})")
-        if (due.isEmpty()) content.add(empty("Aaj koi follow-up nahi. Doctor visit mein follow-up date daalo to yahan nazar aayegi."))
+        if (due.isEmpty()) content.add(empty("Aaj koi follow-up nahi."))
         due.forEach { v ->
             val late = v.followup < dS
             val doneBtn = iconBtn("✓") { db.setFollowDone(v.id); Followups.cancel(this, v.id); refresh() }
@@ -70,9 +79,27 @@ class MainActivity : BaseActivity() {
                     (if (late) "⚠ ${Fmt.date(v.followup)} se pending" else "Aaj") +
                         (if (v.products.isNotBlank()) " • ${v.products}" else ""),
                     if (v.notes.isNotBlank()) v.notes else "",
-                    doneBtn, { open(DoctorDetailActivity::class.java, v.doctorId) }
+                    doneBtn, { open(DetailingActivity::class.java, v.doctorId) }
                 ), 6
             )
+        }
+
+        // ---- Store orders due ----
+        val ro = Reorder.due(db)
+        section("🏪 Store orders due (${ro.size})")
+        if (ro.isEmpty()) content.add(empty("Kisi store ka order due nahi. (2 orders/invoices ke baad app khud andaza lagata hai)"))
+        ro.take(6).forEach { content.add(reorderRow(it), 6) }
+
+        // ---- Overdue A doctors ----
+        val od = docs.filter { it.category == "A" && it.isOverdue() }
+        if (od.isNotEmpty()) {
+            section("⏰ 'A' doctors jo overdue hain (${od.size})")
+            od.take(5).forEach { d ->
+                val ds = d.daysSince()
+                content.add(listRow(d.name, listOf(d.area, d.timing).filter { it.isNotBlank() }.joinToString(" • "),
+                    if (ds < 0) "⚠ Kabhi nahi mile" else "⚠ $ds din se", iconBtn("📞") { call(d.phone) },
+                    { open(DetailingActivity::class.java, d.id) }), 6)
+            }
         }
     }
 
