@@ -16,8 +16,10 @@ data class Brand(
 /** Product = brand ka ek SKU (maslan Redep 50mg, 30 tabs). Price SKU ki hoti hai. */
 data class Product(
     val id: Long, val brandId: Long, val brandName: String, val strength: String, val pack: String,
-    val price: Double, val unitPrice: Double, val unitLabel: String
+    val price: Double, val unitPrice: Double, val unitLabel: String, val tp: Double = 0.0
 ) {
+    /** Order mein TP lagti hai; TP na ho to MRP */
+    val orderPrice: Double get() = if (tp > 0) tp else price
     val name: String get() = "$brandName $strength".trim()
     val label: String get() = if (pack.isBlank()) name else "$name ($pack)"
     val unitText: String get() = if (unitPrice > 0) "${Fmt.rs(unitPrice)} / ${unitLabel.ifBlank { "unit" }}" else ""
@@ -59,7 +61,7 @@ data class OrderItem(var productId: Long, var name: String, var qty: Int, var pr
 /** Report ke liye: naam, ginti, raqam */
 data class Agg(val name: String, val count: Double, val amount: Double)
 
-class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "mrdiary_v3.db", null, 1) {
+class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "mrdiary_v3.db", null, 2) {
 
     companion object {
         @Volatile private var inst: Db? = null
@@ -70,7 +72,7 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
     override fun onCreate(d: SQLiteDatabase) {
         d.execSQL("CREATE TABLE brands(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, generic TEXT DEFAULT '', category TEXT DEFAULT '', script TEXT DEFAULT '', audio TEXT, sort INTEGER DEFAULT 0)")
         d.execSQL("CREATE TABLE brand_images(id INTEGER PRIMARY KEY AUTOINCREMENT, brand_id INTEGER, path TEXT, created INTEGER)")
-        d.execSQL("CREATE TABLE products(id INTEGER PRIMARY KEY AUTOINCREMENT, brand_id INTEGER, strength TEXT DEFAULT '', pack TEXT DEFAULT '', price REAL DEFAULT 0, unit_price REAL DEFAULT 0, unit_label TEXT DEFAULT '', sort INTEGER DEFAULT 0)")
+        d.execSQL("CREATE TABLE products(id INTEGER PRIMARY KEY AUTOINCREMENT, brand_id INTEGER, strength TEXT DEFAULT '', pack TEXT DEFAULT '', price REAL DEFAULT 0, unit_price REAL DEFAULT 0, unit_label TEXT DEFAULT '', sort INTEGER DEFAULT 0, tp REAL DEFAULT 0)")
         d.execSQL("CREATE TABLE stores(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, owner TEXT DEFAULT '', phone TEXT DEFAULT '', area TEXT DEFAULT '')")
         d.execSQL("CREATE TABLE orders(id INTEGER PRIMARY KEY AUTOINCREMENT, store_id INTEGER, store_name TEXT, date INTEGER, gross REAL, discount REAL, net REAL, note TEXT DEFAULT '')")
         d.execSQL("CREATE TABLE order_items(id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER, product_id INTEGER, name TEXT, qty INTEGER, price REAL, disc REAL)")
@@ -80,7 +82,12 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         Seed.run(app, d)
     }
 
-    override fun onUpgrade(d: SQLiteDatabase, old: Int, new: Int) {}
+    override fun onUpgrade(d: SQLiteDatabase, old: Int, new: Int) {
+        if (old < 2) {
+            d.execSQL("ALTER TABLE products ADD COLUMN tp REAL DEFAULT 0")
+            Seed.applyPrices(d)
+        }
+    }
 
     // ---------- helpers ----------
     private fun cv(vararg p: Pair<String, Any?>) = ContentValues().apply {
@@ -155,7 +162,7 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
     // ---------- products (SKUs) ----------
     private val pSql = "SELECT p.*, b.name AS bname FROM products p JOIN brands b ON b.id=p.brand_id"
     private fun Cursor.toProduct() = Product(
-        l("id"), l("brand_id"), s("bname"), s("strength"), s("pack"), d("price"), d("unit_price"), s("unit_label")
+        l("id"), l("brand_id"), s("bname"), s("strength"), s("pack"), d("price"), d("unit_price"), s("unit_label"), d("tp")
     )
 
     /** Saare SKUs, brand ke order mein */
@@ -163,10 +170,10 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
     fun products(brandId: Long): List<Product> = q("$pSql WHERE p.brand_id=? ORDER BY p.sort, p.id", brandId) { it.toProduct() }
     fun product(id: Long): Product? = q("$pSql WHERE p.id=?", id) { it.toProduct() }.firstOrNull()
 
-    fun saveProduct(id: Long, brandId: Long, strength: String, pack: String, price: Double, unitPrice: Double, unitLabel: String): Long =
+    fun saveProduct(id: Long, brandId: Long, strength: String, pack: String, price: Double, unitPrice: Double, unitLabel: String, tp: Double): Long =
         upsert("products", id, cv(
             "brand_id" to brandId, "strength" to strength, "pack" to pack,
-            "price" to price, "unit_price" to unitPrice, "unit_label" to unitLabel
+            "price" to price, "unit_price" to unitPrice, "unit_label" to unitLabel, "tp" to tp
         ))
 
     fun deleteProduct(id: Long) {
@@ -362,51 +369,74 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
 // Pehli baar app khulne par GeniX ki saari medicines + literature daal do
 // =====================================================================
 object Seed {
-    private class Sku(val strength: String, val pack: String, val price: Double, val unit: Double, val label: String)
+    /** price = MRP, tp = Trade Price (order mein yahi lagti hai), unit = per tab/cap/dose (MRP se) */
+    private class Sku(val strength: String, val pack: String, val price: Double, val tp: Double, val unit: Double, val label: String)
     private class B(val name: String, val generic: String, val cat: String, val images: List<String>, val skus: List<Sku>)
+
+    private fun per(mrp: Double, n: Int) = Math.round(mrp / n * 100) / 100.0
 
     private val data = listOf(
         B("Neram", "Alprazolam", "Anxiety (GAD)", listOf("neram"), listOf(
-            Sku("0.5mg", "30 Tabs", 300.0, 10.0, "tab"))),
+            Sku("0.5mg", "30 Tabs", 330.0, 280.5, per(330.0, 30), "tab"))),
         B("Lalap", "Lacosamide", "Antiepileptic", listOf("lalap_1", "lalap_2"), listOf(
-            Sku("200mg", "14 Tabs", 1400.0, 100.0, "tab"),
-            Sku("10mg/ml Syrup", "100ml", 664.0, 0.0, "dose"))),
+            Sku("200mg", "14 Tabs", 1500.0, 1275.0, per(1500.0, 14), "tab"),
+            Sku("10mg/ml Syrup", "100ml", 664.0, 564.4, 0.0, "dose"))),
         B("Recetam", "Levetiracetam", "Antiepileptic", listOf("recetam"), listOf(
-            Sku("250mg", "10 Tabs", 400.0, 40.0, "tab"),
-            Sku("500mg", "10 Tabs", 630.0, 63.0, "tab"),
-            Sku("100mg/ml Solution", "60ml", 540.0, 0.0, "dose"),
-            Sku("500mg/5ml I.V Infusion", "1 Vial", 450.0, 0.0, "dose"))),
+            Sku("250mg", "10 Tabs", 420.0, 357.0, per(420.0, 10), "tab"),
+            Sku("500mg", "10 Tabs", 650.0, 552.5, per(650.0, 10), "tab"),
+            Sku("100mg/ml Solution", "60ml", 565.0, 480.25, 0.0, "dose"),
+            Sku("100mg/ml Solution 30ml", "30ml", 299.0, 254.15, 0.0, "dose"),
+            Sku("500mg/5ml I.V Infusion", "1 Vial", 450.0, 382.5, 0.0, "dose"))),
         B("Olagen Plus", "Olanzapine / Fluoxetine", "Antidepressant", listOf("olagen_plus"), listOf(
-            Sku("3/25mg", "30 Caps", 630.0, 21.0, "cap"),
-            Sku("6/25mg", "30 Caps", 730.0, 24.0, "cap"))),
+            Sku("3/25mg", "30 Caps", 650.0, 552.5, per(650.0, 30), "cap"),
+            Sku("6/25mg", "30 Caps", 750.0, 637.5, per(750.0, 30), "cap"))),
         B("Olagen ODT", "Olanzapine", "Antipsychotic", listOf("olagen_odt"), listOf(
-            Sku("5mg", "10 Tabs", 235.0, 23.0, "tab"),
-            Sku("10mg", "10 Tabs", 320.0, 32.0, "tab"))),
+            Sku("5mg", "10 Tabs", 350.0, 297.5, per(350.0, 10), "tab"),
+            Sku("10mg", "10 Tabs", 345.0, 293.25, per(345.0, 10), "tab"))),
         B("Redep", "Sertraline HCl", "Antidepressant", listOf("redep_tablets", "redep_solution"), listOf(
-            Sku("50mg", "30 Tabs", 1080.0, 36.0, "tab"),
-            Sku("100mg", "20 Tabs", 1200.0, 60.0, "tab"),
-            Sku("20mg/ml Solution", "50ml", 600.0, 30.0, "dose"))),
+            Sku("50mg", "30 Tabs", 1080.0, 918.0, per(1080.0, 30), "tab"),
+            Sku("100mg", "20 Tabs", 1200.0, 1020.0, per(1200.0, 20), "tab"),
+            Sku("20mg/ml Solution", "50ml", 600.0, 510.0, 30.0, "dose"))),
         B("Ilodon", "Iloperidone", "Antipsychotic", listOf(), listOf(
-            Sku("2mg", "10 Tabs", 250.0, 25.0, "tab"),
-            Sku("4mg", "10 Tabs", 400.0, 40.0, "tab"))),
+            Sku("2mg", "10 Tabs", 250.0, 212.5, per(250.0, 10), "tab"),
+            Sku("4mg", "10 Tabs", 400.0, 340.0, per(400.0, 10), "tab"))),
         B("Zacloz", "Clozapine", "Antipsychotic", listOf("zacloz"), listOf(
-            Sku("25mg", "50 Tabs", 1250.0, 25.0, "tab"),
-            Sku("100mg", "50 Tabs", 2500.0, 50.0, "tab"),
-            Sku("50mg/ml Suspension", "60ml", 1400.0, 0.0, "dose"))),
+            Sku("25mg", "50 Tabs", 1214.06, 1055.7, per(1214.06, 50), "tab"),
+            Sku("100mg", "50 Tabs", 2428.11, 2111.4, per(2428.11, 50), "tab"),
+            Sku("50mg/ml Suspension", "60ml", 1400.0, 1190.0, 0.0, "dose"))),
         B("Riveme", "Rivastigmine Tartrate", "Alzheimer's / Dementia", listOf("riveme"), listOf(
-            Sku("1.5mg", "60 Caps", 4250.0, 71.0, "cap"),
-            Sku("3mg", "60 Caps", 5100.0, 85.0, "cap"),
-            Sku("2mg/ml Solution", "60ml", 800.0, 0.0, "dose"))),
+            Sku("1.5mg", "60 Caps", 4127.79, 3589.38, per(4127.79, 60), "cap"),
+            Sku("3mg", "60 Caps", 4953.34, 4307.26, per(4953.34, 60), "cap"),
+            Sku("2mg/ml Solution", "60ml", 777.0, 675.65, 0.0, "dose"))),
         B("Memor", "Ginkgo + Bacopa + Huperzia (10 ingredients)", "Brain energizer", listOf("memor"), listOf(
-            Sku("", "30 Caps", 750.0, 25.0, "cap"))),
+            Sku("", "30 Caps", 770.0, 654.5, per(770.0, 30), "cap"))),
         B("Caripz", "Cariprazine", "Antipsychotic", listOf("caripz"), listOf(
-            Sku("1.5mg", "10 Caps", 300.0, 30.0, "cap"),
-            Sku("3mg", "10 Caps", 450.0, 45.0, "cap"),
-            Sku("4.5mg", "10 Caps", 650.0, 65.0, "cap"),
-            Sku("6mg", "10 Caps", 850.0, 85.0, "cap"))),
+            Sku("1.5mg", "10 Caps", 291.37, 253.37, per(291.37, 10), "cap"),
+            Sku("3mg", "10 Caps", 437.06, 380.05, per(437.06, 10), "cap"),
+            Sku("4.5mg", "10 Caps", 631.31, 548.96, per(631.31, 10), "cap"),
+            Sku("6mg", "10 Caps", 825.56, 717.88, per(825.56, 10), "cap"))),
         B("Tadlif", "Tadalafil", "Antidepressant / Men's health", listOf("tadlif"), listOf(
-            Sku("20mg", "8 Tabs", 560.0, 70.0, "tab"))),
+            Sku("20mg", "8 Tabs", 560.0, 476.0, per(560.0, 8), "tab"))),
     )
+
+    private fun skuValues(bid: Long, s: Sku, sort: Int) = ContentValues().apply {
+        put("brand_id", bid); put("strength", s.strength); put("pack", s.pack)
+        put("price", s.price); put("tp", s.tp); put("unit_price", s.unit); put("unit_label", s.label); put("sort", sort)
+    }
+
+    /** Purani install par naye MRP/TP lagao (brand + strength se match), naye SKU add karo */
+    fun applyPrices(d: SQLiteDatabase) {
+        data.forEach { b ->
+            val bid = d.rawQuery("SELECT id FROM brands WHERE name=? COLLATE NOCASE", arrayOf(b.name)).use {
+                if (it.moveToFirst()) it.getLong(0) else -1L
+            }
+            if (bid < 0) return@forEach
+            b.skus.forEachIndexed { si, s ->
+                val n = d.update("products", skuValues(bid, s, si), "brand_id=? AND strength=?", arrayOf(bid.toString(), s.strength))
+                if (n == 0) d.insert("products", null, skuValues(bid, s, si))
+            }
+        }
+    }
 
     fun run(ctx: Context, d: SQLiteDatabase) {
         val dir = File(ctx.filesDir, "images").apply { mkdirs() }
@@ -420,12 +450,7 @@ object Seed {
                     put("brand_id", bid); put("path", f.absolutePath); put("created", System.currentTimeMillis())
                 })
             }
-            b.skus.forEachIndexed { si, s ->
-                d.insert("products", null, ContentValues().apply {
-                    put("brand_id", bid); put("strength", s.strength); put("pack", s.pack)
-                    put("price", s.price); put("unit_price", s.unit); put("unit_label", s.label); put("sort", si)
-                })
-            }
+            b.skus.forEachIndexed { si, s -> d.insert("products", null, skuValues(bid, s, si)) }
         }
     }
 

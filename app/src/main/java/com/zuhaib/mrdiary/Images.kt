@@ -115,7 +115,14 @@ class FilesProvider : ContentProvider() {
         return c
     }
 
-    override fun getType(uri: Uri): String = "image/jpeg"
+    override fun getType(uri: Uri): String {
+        val p = uri.path ?: ""
+        return when {
+            p.endsWith(".pdf") -> "application/pdf"
+            p.endsWith(".png") -> "image/png"
+            else -> "image/jpeg"
+        }
+    }
     override fun insert(uri: Uri, values: ContentValues?): Uri? = null
     override fun delete(uri: Uri, sel: String?, args: Array<out String>?): Int = 0
     override fun update(uri: Uri, values: ContentValues?, sel: String?, args: Array<out String>?): Int = 0

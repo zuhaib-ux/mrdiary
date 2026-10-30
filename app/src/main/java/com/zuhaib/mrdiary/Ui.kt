@@ -138,7 +138,8 @@ abstract class BaseActivity : Activity() {
         if (s.pack.isNotBlank()) left.add(text(s.pack, 13f, color = C.SUB))
         addView(left, LinearLayout.LayoutParams(0, WRAP, 1f))
         val right = vbox().apply { gravity = Gravity.END }
-        right.add(text(if (s.price > 0) Fmt.rs(s.price) else "Price —", 17f, true, C.PRIMARY_DARK), w = WRAP)
+        right.add(text(if (s.price > 0) "MRP ${Fmt.rs(s.price)}" else "MRP —", 16f, true, C.PRIMARY_DARK), w = WRAP)
+        if (s.tp > 0) right.add(text("TP ${Fmt.rs(s.tp)}", 13.5f, true, C.SUB), w = WRAP)
         if (s.unitText.isNotBlank()) right.add(text(s.unitText, 13.5f, true, C.ORANGE), w = WRAP)
         addView(right)
         if (onClick != null) setOnClickListener { onClick() }
@@ -366,7 +367,10 @@ abstract class BaseActivity : Activity() {
         val strength = input("Maslan: 50mg ya 20mg/ml Solution", p?.strength ?: "", T.TEXT)
         val pack = input("Maslan: 30 Tabs, 60ml", p?.pack ?: "", T.TEXT)
         val price = input("Rs", p?.let { if (it.price > 0) Fmt.plain(it.price) else "" } ?: "", T.DEC)
+        val tp = input("Rs", p?.let { if (it.tp > 0) Fmt.plain(it.tp) else "" } ?: "", T.DEC)
         val unit = input("Rs", p?.let { if (it.unitPrice > 0) Fmt.plain(it.unitPrice) else "" } ?: "", T.DEC)
+        var tpTouched = p != null && p.tp > 0
+        tp.onChange { if (tp.hasFocus()) tpTouched = true }
         val label = input("tab / cap / dose", p?.unitLabel ?: "tab", T.TEXT)
         var unitTouched = p != null && p.unitPrice > 0
         unit.onChange { if (unit.hasFocus()) unitTouched = true }
@@ -380,10 +384,16 @@ abstract class BaseActivity : Activity() {
                 label.setText(if (lower.contains("cap")) "cap" else "tab")
             }
         }
-        price.onChange { autoUnit() }; pack.onChange { autoUnit() }
+        fun autoTp() {
+            if (tpTouched) return
+            val pr = price.str().toDoubleOrNull() ?: return
+            tp.setText(Fmt.plain(Math.round(pr * 0.85 * 100) / 100.0))   // GeniX: TP = MRP ka 85%
+        }
+        price.onChange { autoUnit(); autoTp() }; pack.onChange { autoUnit() }
         val body = form(
-            "Strength" to strength, "Pack" to pack, "Price (MRP / pack)" to price,
-            "Per tablet / per dose price" to unit, "Unit ka naam" to label
+            "Strength" to strength, "Pack" to pack, "MRP (pack ki)" to price,
+            "TP — Trade Price (order mein yahi lagegi)" to tp,
+            "Per tablet / per dose (MRP se, patient ke liye)" to unit, "Unit ka naam" to label
         )
         formDialog(if (p == null) "Naya SKU" else "SKU edit — ${p.name}", body, "Save",
             if (p != null) "Delete" else null,
@@ -391,7 +401,8 @@ abstract class BaseActivity : Activity() {
         ) {
             if (strength.str().isEmpty() && pack.str().isEmpty()) { strength.error = "Strength likho"; return@formDialog false }
             db.saveProduct(p?.id ?: 0, brandId, strength.str(), pack.str(),
-                price.str().toDoubleOrNull() ?: 0.0, unit.str().toDoubleOrNull() ?: 0.0, label.str())
+                price.str().toDoubleOrNull() ?: 0.0, unit.str().toDoubleOrNull() ?: 0.0, label.str(),
+                tp.str().toDoubleOrNull() ?: 0.0)
             onSaved(); true
         }
     }

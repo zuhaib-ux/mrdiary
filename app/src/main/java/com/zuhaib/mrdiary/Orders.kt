@@ -71,7 +71,7 @@ class OrderEditActivity : BaseActivity() {
             content.add(
                 listRow(
                     "${idx + 1}. ${it.name}",
-                    "${it.qty} × ${Fmt.rs(it.price)} = ${Fmt.rs(it.gross)}$discLine",
+                    "${it.qty} × TP ${Fmt.rs(it.price)} = ${Fmt.rs(it.gross)}$discLine",
                     "Net: ${Fmt.rs(it.net)}",
                     del, { itemDialog(idx) }
                 ), 6
@@ -86,7 +86,7 @@ class OrderEditActivity : BaseActivity() {
             background = rounded(C.PRIMARY_DARK, 16f)
             setPadding(dp(16), dp(14), dp(16), dp(16))
         }
-        tc.add(totalLine("Total (bagair discount)", Fmt.rs(gross)))
+        tc.add(totalLine("Total (TP, bagair discount)", Fmt.rs(gross)))
         tc.add(totalLine("Discount", "− " + Fmt.rs(disc)), 4)
         if (gross > 0) tc.add(totalLine("Average discount", Fmt.plain(Math.round(disc / gross * 1000) / 10.0) + "%"), 4)
         tc.add(text("NET TOTAL", 13f, true, 0xCCFFFFFF.toInt()), 12)
@@ -102,7 +102,7 @@ class OrderEditActivity : BaseActivity() {
         // ---- Actions ----
         val row = hrow()
         row.addWeighted(btn("💾 Save") { if (save()) toast("✓ Order save ho gaya") })
-        row.addWeighted(btn("📤 WhatsApp", 1) { if (save()) shareText(shareMsg()) }, 8)
+        row.addWeighted(btn("📤 Bhejo", 1) { if (save()) shareMenu() }, 8)
         content.add(row, 14)
     }
 
@@ -151,10 +151,10 @@ class OrderEditActivity : BaseActivity() {
         qty.onChange { upd() }; rate.onChange { upd() }; disc.onChange { upd() }
 
         prodBtn.setOnClickListener {
-            pick("Medicine chuno", prods.map { if (it.price > 0) "${it.label}  — ${Fmt.rs(it.price)}" else it.label }) { i ->
+            pick("Medicine chuno", prods.map { if (it.orderPrice > 0) "${it.label}  — TP ${Fmt.rs(it.orderPrice)}" else it.label }) { i ->
                 sel = prods[i]; selName = prods[i].name
                 prodBtn.text = "$selName ▾"
-                rate.setText(if (prods[i].price > 0) Fmt.plain(prods[i].price) else "")
+                rate.setText(if (prods[i].orderPrice > 0) Fmt.plain(prods[i].orderPrice) else "")
                 qty.requestFocus()
             }
         }
@@ -168,7 +168,7 @@ class OrderEditActivity : BaseActivity() {
         body.add(prodBtn, 4)
         val r1 = hrow()
         r1.addWeighted(labeled("Quantity", qty))
-        r1.addWeighted(labeled("Rate (Rs)", rate), 10)
+        r1.addWeighted(labeled("TP (Rs)", rate), 10)
         body.add(r1, 8)
         body.add(labeled("Discount %", disc), 8)
         body.add(chipRow(*quick.toTypedArray()), 6)
@@ -203,19 +203,35 @@ class OrderEditActivity : BaseActivity() {
         return true
     }
 
-    private fun shareMsg(): String {
-        val sb = StringBuilder()
-        sb.append("*Order — $storeName*\n")
-        sb.append("Date: ${Fmt.dateTime(date)}\n\n")
-        items.forEachIndexed { i, it ->
-            sb.append("${i + 1}. ${it.name} — ${it.qty} × ${Fmt.n(it.price)}")
-            if (it.disc > 0) sb.append(" (−${Fmt.plain(it.disc)}%)")
-            sb.append(" = ${Fmt.rs(it.net)}\n")
+    private fun invoice(): Invoice {
+        val prefs = getSharedPreferences("prefs", MODE_PRIVATE)
+        return Invoice(orderId, storeName, db.store(storeId)?.area ?: "", date, items, note.trim(), prefs.getString("sender", "") ?: "")
+    }
+
+    private fun shareMenu() {
+        val prefs = getSharedPreferences("prefs", MODE_PRIVATE)
+        val sender = prefs.getString("sender", "") ?: ""
+        val opts = listOf(
+            "🖼  Image (table) — WhatsApp ke liye best",
+            "📄  PDF",
+            "💬  Text message",
+            "✏  Apna naam / company: " + sender.ifBlank { "set nahi" }
+        )
+        pick("Order kaise bhejna hai?", opts) { i ->
+            try {
+                when (i) {
+                    0 -> Invoice.shareFile(this, invoice().image(this), "image/png", "Order — $storeName")
+                    1 -> Invoice.shareFile(this, invoice().pdf(this), "application/pdf", "Order — $storeName")
+                    2 -> shareText(invoice().text())
+                    3 -> {
+                        val box = input("Maslan: Zuhaib Ali — GeniX Pharma", sender, T.NAME)
+                        formDialog("Order par aap ka naam", form("Image / PDF / text ke upar likha aayega" to box)) {
+                            prefs.edit().putString("sender", box.str()).apply(); shareMenu(); true
+                        }
+                    }
+                }
+            } catch (e: Exception) { toast("Ban nahi saka: ${e.message}") }
         }
-        val gross = items.sumOf { it.gross }; val disc = items.sumOf { it.discAmt }
-        sb.append("\nTotal: ${Fmt.rs(gross)}\nDiscount: ${Fmt.rs(disc)}\n*Net Total: ${Fmt.rs(gross - disc)}*")
-        if (note.isNotBlank()) sb.append("\n\nNote: ${note.trim()}")
-        return sb.toString()
     }
 
     override fun onBackRequested(): Boolean {
