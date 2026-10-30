@@ -49,7 +49,8 @@ class MainActivity : BaseActivity() {
         val docs = db.doctors()
         val overdue = docs.count { it.isOverdue() }
         val tiles = listOf(
-            Triple("📅", "Aaj ka plan", "Area, timing, stores") to { open(PlanActivity::class.java) },
+            Triple("📅", "Aaj ka plan", "Subah / shaam calls") to { open(PlanActivity::class.java) },
+            Triple("🗓", "Tour plan", "Mahina, import, check") to { open(TourActivity::class.java) },
             Triple("⏰", "Overdue ($overdue)", "Kaafi din se nahi mile") to { open(OverdueActivity::class.java) },
             Triple("👨‍⚕️", "Doctors", "Literature, visits") to { open(DoctorListActivity::class.java) },
             Triple("🧾", "Naya Order", "Store ka order likho") to { open(OrderEditActivity::class.java) },
@@ -59,6 +60,7 @@ class MainActivity : BaseActivity() {
             Triple("⛽", "TA / DA", "Kharcha aur km") to { open(ExpenseActivity::class.java) },
             Triple("📋", "Orders", "Purane orders") to { open(OrderListActivity::class.java) },
             Triple("📊", "Reports", "Din / mahine") to { open(ReportActivity::class.java) },
+            Triple("⚙", "Mera naam", getSharedPreferences("prefs", MODE_PRIVATE).getString("sender", "")?.ifBlank { "Reports par" } ?: "") to { editSender() },
         )
         tiles.chunked(2).forEach { pair ->
             val row = hrow()
@@ -100,6 +102,14 @@ class MainActivity : BaseActivity() {
                     if (ds < 0) "⚠ Kabhi nahi mile" else "⚠ $ds din se", iconBtn("📞") { call(d.phone) },
                     { open(DetailingActivity::class.java, d.id) }), 6)
             }
+        }
+    }
+
+    private fun editSender() {
+        val prefs = getSharedPreferences("prefs", MODE_PRIVATE)
+        val box = input("Maslan: Zuhaib Ali Mirani — TM, GeniX Pharma", prefs.getString("sender", "") ?: "", T.NAME)
+        formDialog("Aap ka naam", form("Report, order aur claim ke upar likha aayega" to box)) {
+            prefs.edit().putString("sender", box.str()).apply(); refresh(); true
         }
     }
 

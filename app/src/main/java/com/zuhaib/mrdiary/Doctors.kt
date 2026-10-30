@@ -56,7 +56,8 @@ class DoctorListActivity : BaseActivity() {
             listBox.add(
                 listRow(
                     d.name,
-                    listOf(d.specialty, d.clinic, d.area).filter { it.isNotBlank() }.joinToString(" • ") +
+                    listOf(d.specialty, if (d.dclass.isNotBlank()) "Class ${d.dclass}" else "", d.area).filter { it.isNotBlank() }.joinToString(" • ") +
+                        (if (d.notInDigilyzr) "\n⚠ Digilyzr mein nahi" else "") +
                         (if (d.timing.isNotBlank()) "\n🕐 ${d.timing}" else ""),
                     last, rowBtns(d),
                     { open(DetailingActivity::class.java, d.id) },
@@ -97,7 +98,9 @@ class DoctorDetailActivity : BaseActivity() {
         val c = card()
         c.add(text(d.name, 20f, true))
         listOf(
-            if (d.specialty.isNotBlank()) "🩺 ${d.specialty}" else "",
+            if (d.specialty.isNotBlank()) "🩺 ${d.specialty}" + (if (d.qual.isNotBlank()) " (${d.qual})" else "") else "",
+            if (d.code.isNotBlank() || d.dclass.isNotBlank()) "🆔 Digilyzr ${d.code}" + (if (d.dclass.isNotBlank()) " • Class ${d.dclass}" else "") else "",
+            if (d.notInDigilyzr) "⚠ Tour plan mein hai, Digilyzr list mein nahi" else "",
             if (d.clinic.isNotBlank()) "🏥 ${d.clinic}" else "",
             if (d.area.isNotBlank()) "📍 ${d.area}" else "",
             if (d.phone.isNotBlank()) "📱 ${d.phone}" else "",

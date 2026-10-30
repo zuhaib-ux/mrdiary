@@ -183,7 +183,7 @@ class DetailingActivity : BaseActivity() {
         val ds = d.daysSince()
         val head = hrow()
         head.addView(text("📝 Andar jaane se pehle", 15f, true, C.PRIMARY_DARK), LinearLayout.LayoutParams(0, WRAP, 1f))
-        head.addView(text(" ${d.category} ", 13f, true, Color.WHITE).apply {
+        head.addView(text(" ${d.dclass.ifBlank { d.category }} ", 13f, true, Color.WHITE).apply {
             background = rounded(if (d.isOverdue()) C.ORANGE else C.PRIMARY, 8f); setPadding(dp(8), dp(2), dp(8), dp(2))
         })
         c.add(head)

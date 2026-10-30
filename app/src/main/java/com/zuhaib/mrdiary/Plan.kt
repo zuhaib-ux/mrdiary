@@ -43,10 +43,72 @@ object Reorder {
 class PlanActivity : BaseActivity() {
     private val prefs by lazy { getSharedPreferences("prefs", MODE_PRIVATE) }
     private fun key() = "plan_" + Range.dayStart()
+    private var day = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        day = Range.dayStart(intent.getLongExtra("day", System.currentTimeMillis()))
         super.onCreate(savedInstanceState)
-        title = "Aaj ka plan"
+        title = if (day == Range.dayStart()) "Aaj ka plan" else Fmt.day(day)
+    }
+
+    /** Tour plan wala din: subah / shaam ki list, plan ki tarteeb mein */
+    private fun renderTour(rows: List<Db.TourRow>) {
+        val isToday = day == Range.dayStart()
+        val docs = db.doctors().associateBy { it.id }
+        val visited = db.visitsBetween(day, Range.dayEnd(day)).map { it.doctorId }.toSet()
+        val followIds = db.dueFollowups(Range.dayEnd(day)).map { it.doctorId }.toSet()
+        val area = rows.first().area
+
+        val head = vbox().apply { background = rounded(C.PRIMARY, 14f); setPadding(dp(14), dp(10), dp(14), dp(12)) }
+        head.add(text(Fmt.day(day) + " • " + Days.URDU[Days.ALL.indexOf(Days.ALL[(Calendar.getInstance().apply { timeInMillis = day }.get(Calendar.DAY_OF_WEEK) + 5) % 7])], 14f, color = 0xDDFFFFFF.toInt()))
+        head.add(text("📍 $area", 20f, true, Color.WHITE), 2)
+        val done = rows.map { it.doctorId }.distinct().count { it in visited }
+        head.add(text("Tour plan: ${rows.size} calls • $done mil liye", 13.5f, color = 0xE6FFFFFF.toInt()), 4)
+        val nav = hrow()
+        nav.addWeighted(btn("◀ Pichla din", 3, 13f) { jump(-1) })
+        nav.addWeighted(btn("🗓 Mahina", 3, 13f) { open(TourActivity::class.java) }, 6)
+        nav.addWeighted(btn("Agla din ▶", 3, 13f) { jump(1) }, 6)
+        head.add(nav, 10)
+        content.add(head)
+
+        for ((sess, label) in listOf("M" to "🌅 Subah", "E" to "🌆 Shaam")) {
+            val list = rows.filter { it.session == sess }
+            if (list.isEmpty()) continue
+            section("$label (${list.count { it.doctorId in visited }}/${list.size})")
+            list.forEach { r ->
+                val d = docs[r.doctorId] ?: return@forEach
+                val ds = d.daysSince()
+                val tags = buildList {
+                    if (d.id in visited) add("✓ Mil liye")
+                    if (d.id in followIds) add("🔔 Follow-up")
+                    if (d.notInDigilyzr) add("⚠ Digilyzr mein nahi")
+                    if (d.id !in visited && ds >= 7) add("$ds din se")
+                    if (d.id !in visited && ds < 0) add("Pehli visit")
+                }.joinToString("  ")
+                val sub = listOf(d.specialty, if (d.dclass.isNotBlank()) "Class ${d.dclass}" else "", d.timing).filter { it.isNotBlank() }.joinToString(" • ")
+                val row = listRow("${r.idx + 1}. ${d.name}", sub, tags, iconBtn("📞") { call(d.phone) },
+                    { open(DetailingActivity::class.java, d.id) })
+                if (d.id in visited) row.alpha = 0.55f
+                content.add(row, 6)
+            }
+        }
+
+        if (isToday || day > Range.dayStart()) {
+            val due = Reorder.due(db, 1).filter { it.store.area.isBlank() || area.contains(it.store.area.trim(), true) }
+            if (due.isNotEmpty()) {
+                section("🏪 Stores — order due (${due.size})")
+                due.forEach { content.add(reorderRow(it), 6) }
+            }
+        }
+    }
+
+    private fun jump(delta: Int) {
+        val c = Calendar.getInstance().apply { timeInMillis = day; add(Calendar.DAY_OF_MONTH, delta) }
+        // Off din chhod do (max 7)
+        var n = 0
+        while (db.tourFor(c.timeInMillis).isEmpty() && n < 7) { c.add(Calendar.DAY_OF_MONTH, delta); n++ }
+        startActivity(Intent(this, PlanActivity::class.java).putExtra("day", c.timeInMillis))
+        finish()
     }
 
     private fun selectedAreas(): Set<String> =
@@ -55,6 +117,17 @@ class PlanActivity : BaseActivity() {
     private fun setAreas(a: Set<String>) { prefs.edit().putString(key(), a.joinToString("|")).apply() }
 
     override fun render() {
+        val tour = db.tourFor(day)
+        if (tour.isNotEmpty()) { renderTour(tour); return }
+        if (day != Range.dayStart()) {
+            content.add(empty("${Fmt.day(day)}: tour plan mein is din kuch nahi (off ya plan nahi)."))
+            val nav = hrow()
+            nav.addWeighted(btn("◀ Pichla din", 3, 13f) { jump(-1) })
+            nav.addWeighted(btn("🗓 Mahina", 3, 13f) { open(TourActivity::class.java) }, 6)
+            nav.addWeighted(btn("Agla din ▶", 3, 13f) { jump(1) }, 6)
+            content.add(nav, 8)
+            return
+        }
         val today = Days.today()
         val all = db.doctors()
         val areas = all.map { it.area.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }.sorted()
@@ -63,6 +136,11 @@ class PlanActivity : BaseActivity() {
         val head = vbox().apply { background = rounded(C.PRIMARY, 14f); setPadding(dp(14), dp(10), dp(14), dp(12)) }
         head.add(text(Fmt.day(System.currentTimeMillis()) + " • " + Days.URDU[Days.ALL.indexOf(today)], 14f, color = 0xDDFFFFFF.toInt()))
         head.add(text("Aaj kis area mein ja rahe ho?", 18f, true, Color.WHITE), 2)
+        head.add(text("Aaj ke liye tour plan nahi mila — area chun kar dekho", 12.5f, color = 0xDDFFFFFF.toInt()), 2)
+        val nav0 = hrow()
+        nav0.addWeighted(btn("🗓 Tour plan", 3, 13f) { open(TourActivity::class.java) })
+        nav0.addWeighted(btn("Agla din ▶", 3, 13f) { jump(1) }, 6)
+        head.add(nav0, 8)
         content.add(head)
 
         if (areas.isNotEmpty()) {
@@ -252,13 +330,15 @@ class MorningReceiver : BroadcastReceiver() {
         val db = Db.get(ctx)
         val today = Days.today()
         val docs = db.doctors()
-        val sitting = docs.count { it.dayList.isNotEmpty() && it.sitsOn(today) }
+        val tourToday = db.tourFor(System.currentTimeMillis())
+        val sitting = if (tourToday.isNotEmpty()) tourToday.size else docs.count { it.dayList.isNotEmpty() && it.sitsOn(today) }
         val fu = db.dueFollowups(Range.dayEnd()).size
         val stores = Reorder.due(db).size
         val overdueA = docs.count { it.category == "A" && it.isOverdue() }
         if (fu + stores + overdueA == 0 && sitting == 0) return
         val parts = buildList {
-            if (sitting > 0) add("$sitting doctors aaj baithe hain")
+            if (tourToday.isNotEmpty()) add("📍 ${tourToday.first().area}: $sitting calls (tour plan)")
+            else if (sitting > 0) add("$sitting doctors aaj baithe hain")
             if (fu > 0) add("$fu follow-up")
             if (stores > 0) add("$stores store orders due")
             if (overdueA > 0) add("$overdueA 'A' doctors overdue")

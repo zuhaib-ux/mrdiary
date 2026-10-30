@@ -32,8 +32,12 @@ data class Store(val id: Long, val name: String, val owner: String, val phone: S
 data class Doctor(
     val id: Long, val name: String, val specialty: String, val clinic: String,
     val area: String, val phone: String, val timeFrom: String = "", val timeTo: String = "",
-    val days: String = "", val lastVisit: Long = 0, val category: String = "B"
+    val days: String = "", val lastVisit: Long = 0, val category: String = "B",
+    val code: String = "", val qual: String = "", val dclass: String = "", val aliases: String = "",
+    val digilyzr: Int = -1
 ) {
+    /** 1 = Digilyzr list mein hai, 0 = sirf tour plan mein, -1 = khud add kiya */
+    val notInDigilyzr: Boolean get() = digilyzr == 0
     val dayList: List<String> get() = Days.parse(days)
     val daysText: String get() = Days.text(dayList)
     val timing: String get() = when {
@@ -117,7 +121,7 @@ data class OrderItem(var productId: Long, var name: String, var qty: Int, var pr
 /** Report ke liye: naam, ginti, raqam */
 data class Agg(val name: String, val count: Double, val amount: Double)
 
-class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "mrdiary_v3.db", null, 3) {
+class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "mrdiary_v3.db", null, 4) {
 
     companion object {
         @Volatile private var inst: Db? = null
@@ -136,7 +140,9 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         d.execSQL("CREATE TABLE doctor_products(doctor_id INTEGER, product_id INTEGER, kind INTEGER, PRIMARY KEY(doctor_id, product_id))")
         d.execSQL("CREATE TABLE visits(id INTEGER PRIMARY KEY AUTOINCREMENT, doctor_id INTEGER, date INTEGER, products TEXT DEFAULT '', notes TEXT DEFAULT '', followup INTEGER DEFAULT 0, follow_done INTEGER DEFAULT 0)")
         v3(d)
+        v4(d)
         Seed.run(app, d)
+        Seed.doctors(app, d)
     }
 
     override fun onUpgrade(d: SQLiteDatabase, old: Int, new: Int) {
@@ -145,6 +151,14 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
             Seed.applyPrices(d)
         }
         if (old < 3) v3(d)
+        if (old < 4) { v4(d); Seed.doctors(app, d) }
+    }
+
+    /** v4: Digilyzr fields + tour plan */
+    private fun v4(d: SQLiteDatabase) {
+        listOf("code", "qual", "dclass", "aliases").forEach { d.execSQL("ALTER TABLE doctors ADD COLUMN $it TEXT DEFAULT ''") }
+        d.execSQL("ALTER TABLE doctors ADD COLUMN digilyzr INTEGER DEFAULT -1")
+        d.execSQL("CREATE TABLE IF NOT EXISTS tour(id INTEGER PRIMARY KEY AUTOINCREMENT, date INTEGER, area TEXT, session TEXT, idx INTEGER, doctor_id INTEGER)")
     }
 
     /** v3: doctor category, supplier invoices, TA/DA */
@@ -262,7 +276,8 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         l("id"), s("name"), s("specialty"), s("clinic"), s("area"), s("phone"),
         s("time_from"), s("time_to"), s("days"),
         if (getColumnIndex("last") >= 0) l("last") else 0,
-        s("category").ifBlank { "B" }
+        s("category").ifBlank { "B" },
+        s("code"), s("qual"), s("dclass"), s("aliases"), i("digilyzr")
     )
 
     fun doctors(): List<Doctor> = q(
@@ -411,6 +426,51 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         del("order_items", "order_id=?", id)
         del("orders", "id=?", id)
     }
+
+    // ---------- tour plan ----------
+    data class TourRow(val date: Long, val area: String, val session: String, val idx: Int, val doctorId: Long)
+    data class TourDay(val date: Long, val area: String, val morning: Int, val evening: Int)
+
+    fun tourFor(day: Long): List<TourRow> = q(
+        "SELECT * FROM tour WHERE date=? ORDER BY session DESC, idx", Range.dayStart(day)
+    ) { TourRow(it.l("date"), it.s("area"), it.s("session"), it.i("idx"), it.l("doctor_id")) }
+
+    fun tourDays(from: Long, to: Long): List<TourDay> = q(
+        "SELECT date, MAX(area) AS area, SUM(session='M') AS m, SUM(session='E') AS e FROM tour WHERE date BETWEEN ? AND ? GROUP BY date ORDER BY date",
+        from, to
+    ) { TourDay(it.l("date"), it.s("area"), it.i("m"), it.i("e")) }
+
+    fun tourDoctorIds(from: Long, to: Long): Set<Long> =
+        q("SELECT DISTINCT doctor_id FROM tour WHERE date BETWEEN ? AND ?", from, to) { it.l("doctor_id") }.toSet()
+
+    fun tourRange(): Pair<Long, Long>? = q("SELECT MIN(date) AS a, MAX(date) AS b FROM tour") {
+        if (it.isNull(0)) null else it.l("a") to it.l("b")
+    }.firstOrNull()
+
+    /** Naya tour plan: un dates ki purani entries hata kar nayi daalo */
+    fun replaceTour(rows: List<TourRow>) {
+        val w = writableDatabase
+        w.beginTransaction()
+        try {
+            rows.map { it.date }.distinct().forEach { del("tour", "date=?", it) }
+            rows.forEach { r ->
+                w.insert("tour", null, cv("date" to r.date, "area" to r.area, "session" to r.session, "idx" to r.idx, "doctor_id" to r.doctorId))
+            }
+            w.setTransactionSuccessful()
+        } finally { w.endTransaction() }
+    }
+
+    fun addDoctorFromPlan(name: String, area: String): Long = upsert("doctors", 0, cv(
+        "name" to name, "area" to area, "aliases" to name, "digilyzr" to 0, "category" to "A"
+    ))
+
+    fun addAlias(id: Long, alias: String) {
+        val d = doctor(id) ?: return
+        val set = d.aliases.split("|").filter { it.isNotBlank() }.toMutableSet()
+        if (set.add(alias)) upsert("doctors", id, cv("aliases" to set.joinToString("|")))
+    }
+
+    fun setDays(id: Long, days: String) = upsert("doctors", id, cv("days" to days))
 
     // ---------- supplier invoices ----------
     private fun Cursor.toInv() = SupplierInvoice(
@@ -572,6 +632,47 @@ object Seed {
             }
             b.skus.forEachIndexed { si, s -> d.insert("products", null, skuValues(bid, s, si)) }
         }
+    }
+
+    /** Digilyzr ke 95 doctors + November tour plan (assets/data) */
+    fun doctors(ctx: Context, d: SQLiteDatabase) {
+        try {
+            val existing = HashMap<String, Long>()
+            d.rawQuery("SELECT id, name FROM doctors", null).use { c ->
+                while (c.moveToNext()) existing[NameMatch.norm(c.getString(1))] = c.getLong(0)
+            }
+            val keyToId = HashMap<String, Long>()
+            ctx.assets.open("data/doctors.tsv").bufferedReader().readLines().forEach { line ->
+                val f = line.split("\t")
+                if (f.size < 9) return@forEach
+                val v = ContentValues().apply {
+                    put("name", "Dr. " + f[1]); put("qual", f[2]); put("specialty", f[3]); put("clinic", f[4])
+                    put("area", f[5]); put("dclass", f[6]); put("digilyzr", f[7].toInt()); put("aliases", f[8])
+                    if (!f[0].startsWith("X:")) put("code", f[0])
+                }
+                val old = existing[NameMatch.norm(f[1])]
+                val id = if (old != null) { d.update("doctors", v, "id=?", arrayOf(old.toString())); old }
+                         else { v.put("category", "A"); d.insert("doctors", null, v) }
+                keyToId[f[0]] = id
+            }
+            val fmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            val days = HashMap<Long, MutableSet<String>>()
+            ctx.assets.open("data/tour.tsv").bufferedReader().readLines().forEach { line ->
+                val f = line.split("\t")
+                if (f.size < 5) return@forEach
+                val id = keyToId[f[4]] ?: return@forEach
+                val date = Range.dayStart(fmt.parse(f[0])!!.time)
+                d.insert("tour", null, ContentValues().apply {
+                    put("date", date); put("area", f[1]); put("session", f[2]); put("idx", f[3].toInt()); put("doctor_id", id)
+                })
+                val c = java.util.Calendar.getInstance().apply { timeInMillis = date }
+                days.getOrPut(id) { mutableSetOf() }.add(Days.ALL[(c.get(java.util.Calendar.DAY_OF_WEEK) + 5) % 7])
+            }
+            days.forEach { (id, ds) ->
+                d.update("doctors", ContentValues().apply { put("days", Days.ALL.filter { it in ds }.joinToString(",")) },
+                    "id=? AND (days IS NULL OR days='')", arrayOf(id.toString()))
+            }
+        } catch (e: Exception) { }
     }
 
     fun copyAsset(ctx: Context, asset: String, out: File): Boolean = try {
