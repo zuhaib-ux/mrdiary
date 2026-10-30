@@ -24,11 +24,10 @@ object Patches {
     private val list = listOf(
         P(listOf("Asif Khaskhali", "Asif Khaskheli"), mapOf(W to listOf("Olagen Plus", "Redep", "Caripz", "Lalap", "Recetam", "Riveme")),
             rename = "Dr. Asif Khaskheli", clinic = "Civil Hospital Khairpur", area = "Khairpur"),
-        P(listOf("Gordhan Das"), mapOf(W to listOf("Riveme", "Tadlif"), R to listOf("Redep", "Olagen Plus")), newName = "Dr. Gordhan Das"),
+        P(listOf("Gordhan Das"), mapOf(W to listOf("Riveme", "Tadlif"), R to listOf("Redep", "Olagen Plus")), newName = "Dr. Gordhan Das", area = "Sukkur"),
         P(listOf("#09345", "Mukhtiar Lakho"), mapOf(M to listOf("Recetam", "Redep"))),
         P(listOf("#04610", "Ghulam Rasool Ghumro"), mapOf(M to listOf("Recetam:Solution", "Lalap:Syrup"))),
         P(listOf("#04839", "Faqeer Qasmi"), mapOf(R to listOf("Tadlif", "Neram"))),
-        P(listOf("#14318", "Deepak Kumar"), mapOf(R to listOf("Olagen Plus", "Redep"))),
         P(listOf("#04734", "Inayat Ullah Awan"), mapOf(R to listOf("Redep", "Olagen Plus"))),
         P(listOf("#04748", "Raj Kumar Sachdewani"), mapOf(R to listOf("Redep"))),
         P(listOf("GR Rind", "G Rasool Rind"), mapOf(M to listOf("Redep", "Olagen Plus", "Caripz"))),
@@ -38,7 +37,6 @@ object Patches {
             spec = "Cardiologist", clinic = "CCU & Cardio OPD, Civil Hospital Sukkur", area = "Sukkur"),
         P(listOf("#39124", "Agha Wasif"), mapOf(R to listOf("Redep", "Olagen Plus", "Olagen ODT"))),
         P(listOf("#41677", "Bakhtawar Shaikh"), mapOf(R to listOf("Redep", "Olagen Plus", "Olagen ODT"))),
-        P(listOf("#30758", "Deepak Girdhari"), mapOf(R to listOf("Olagen Plus", "Redep:50mg", "Riveme"))),
         P(listOf("#40482", "Suneel Kumar"), mapOf(W to listOf("Olagen Plus:6/25", "Riveme:1.5mg,3mg"))),
         P(listOf("#46629", "Hafeez Mushtaq"), mapOf(W to listOf("Recetam:250mg,500mg", "Tadlif"))),
         P(listOf("Murk Channa"), from = "2:00 PM", to = "5:00 PM", days = MON_SAT,
@@ -54,9 +52,45 @@ object Patches {
 
     fun applyOnce(ctx: Context) {
         val prefs = ctx.getSharedPreferences("prefs", Context.MODE_PRIVATE)
-        if (prefs.getBoolean("patch_2026_10_30", false)) return
-        try { apply(ctx) } catch (_: Exception) {}
-        prefs.edit().putBoolean("patch_2026_10_30", true).apply()
+        if (!prefs.getBoolean("patch_2026_10_30", false)) {
+            try { apply(ctx) } catch (_: Exception) {}
+            prefs.edit().putBoolean("patch_2026_10_30", true).apply()
+        }
+        if (!prefs.getBoolean("patch_2026_10_30b", false)) {
+            try { deepakFix(ctx) } catch (_: Exception) {}
+            prefs.edit().putBoolean("patch_2026_10_30b", true).apply()
+        }
+    }
+
+    /**
+     * "Deepak Kumar" neurologist Hira Sukkur mein baithte hain — Shikarpur wale GP (14318) nahi,
+     * aur Deepak Girdhari (neuro surgeon) bhi nahi. Un ka alag doctor + products + Tuesday shaam ka plan.
+     */
+    private fun deepakFix(ctx: Context) {
+        val db = Db.get(ctx)
+        val docs = db.doctors()
+        val gp = docs.firstOrNull { it.code == "14318" }
+        val girdhari = docs.firstOrNull { it.code == "30758" }
+        // Pichli dafa ghalat jagah lage products hatao
+        gp?.let { g -> (skus(db, "Olagen Plus") + skus(db, "Redep")).forEach { db.removeDoctorProduct(g.id, it.id) } }
+        girdhari?.let { g -> (skus(db, "Olagen Plus") + skus(db, "Redep:50mg") + skus(db, "Riveme")).forEach { db.removeDoctorProduct(g.id, it.id) } }
+
+        val existing = docs.firstOrNull { it.name.equals("Dr. Deepak Kumar (Neuro)", true) }
+        val id = existing?.id ?: db.addDoctorFromPlan("Dr. Deepak Kumar (Neuro)", "Sukkur")
+        val d = db.doctor(id)!!
+        db.saveDoctor(id, d.name, "Neurologist", "Hira Medical Complex Sukkur", "Sukkur", d.phone,
+            d.timeFrom, d.timeTo, d.days, d.category)
+        (skus(db, "Olagen Plus") + skus(db, "Redep") + skus(db, "Riveme")).forEach { db.setDoctorProduct(id, it.id, R) }
+
+        // Tuesday shaam (Hira Sukkur round) mein "Deepak Kumar" = yeh neurologist
+        if (gp != null) db.tourDays(0, Long.MAX_VALUE).filter {
+            Calendar.getInstance().apply { timeInMillis = it.date }.get(Calendar.DAY_OF_WEEK) == Calendar.TUESDAY
+        }.forEach { td -> db.replaceTourDoctor(td.date, "E", gp.id, id) }
+        db.setDays(id, "Tue")
+
+        docs.firstOrNull { it.name.contains("Gordhan", true) }?.let { g ->
+            if (g.area.isBlank()) db.saveDoctor(g.id, g.name, g.specialty, g.clinic, "Sukkur", g.phone, g.timeFrom, g.timeTo, g.days, g.category)
+        }
     }
 
     private fun skus(db: Db, spec: String): List<Product> {

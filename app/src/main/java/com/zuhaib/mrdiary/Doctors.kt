@@ -47,7 +47,7 @@ class DoctorListActivity : BaseActivity() {
             val c = counts[d.id]
             val pc = if (c != null && c.sum() > 0) "✅ ${c[0]}  🎯 ${c[1]}  🔔 ${c[2]}  •  " else ""
             val ds = d.daysSince()
-            val last = pc + "[${d.category}] " + when {
+            val last = pc + when {
                 ds < 0 -> "⚠ Abhi visit nahi hui"
                 ds >= d.cycleDays -> "⚠ $ds din se nahi mile"
                 ds == 0 -> "✓ Aaj mile"
@@ -55,7 +55,7 @@ class DoctorListActivity : BaseActivity() {
             }
             listBox.add(
                 listRow(
-                    d.name,
+                    d.label,
                     listOf(d.specialty, if (d.dclass.isNotBlank()) "Class ${d.dclass}" else "", d.area).filter { it.isNotBlank() }.joinToString(" • ") +
                         (if (d.notInDigilyzr) "\n⚠ Digilyzr mein nahi" else "") +
                         (if (d.timing.isNotBlank()) "\n🕐 ${d.timing}" else ""),
@@ -68,7 +68,8 @@ class DoctorListActivity : BaseActivity() {
     }
 
     private fun rowBtns(d: Doctor) = hrow().apply {
-        addView(iconBtn("📞") { call(d.phone) })
+        addView(iconBtn(if (d.fav) "★" else "☆") { db.setFav(d.id, !d.fav); fillList() })
+        addView(iconBtn("📞") { call(d.phone) }, LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = dp(6) })
         addView(iconBtn("📋") { open(DoctorDetailActivity::class.java, d.id) },
             LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = dp(6) })
     }
@@ -96,7 +97,10 @@ class DoctorDetailActivity : BaseActivity() {
         title = d.name
 
         val c = card()
-        c.add(text(d.name, 20f, true))
+        val nameRow = hrow()
+        nameRow.addView(text(d.name, 20f, true), LinearLayout.LayoutParams(0, WRAP, 1f))
+        nameRow.addView(btn(if (d.fav) "★ Favourite" else "☆ Favourite", if (d.fav) 0 else 1, 13f) { db.setFav(d.id, !d.fav); refresh() })
+        c.add(nameRow)
         listOf(
             if (d.specialty.isNotBlank()) "🩺 ${d.specialty}" + (if (d.qual.isNotBlank()) " (${d.qual})" else "") else "",
             if (d.code.isNotBlank() || d.dclass.isNotBlank()) "🆔 Digilyzr ${d.code}" + (if (d.dclass.isNotBlank()) " • Class ${d.dclass}" else "") else "",

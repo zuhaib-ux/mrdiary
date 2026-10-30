@@ -77,7 +77,7 @@ class DetailingActivity : BaseActivity() {
 
         // ---- Doctor header ----
         val head = vbox().apply { background = rounded(C.PRIMARY, 14f); setPadding(dp(14), dp(10), dp(14), dp(12)) }
-        head.add(text(d.name, 18f, true, Color.WHITE))
+        head.add(text(d.label, 18f, true, Color.WHITE))
         val sub = listOf(d.specialty, d.clinic).filter { it.isNotBlank() }.joinToString(" • ")
         if (sub.isNotBlank()) head.add(text(sub, 13f, color = 0xDDFFFFFF.toInt()), 2)
         if (d.timing.isNotBlank()) head.add(text("🕐 ${d.timing}", 13.5f, true, Color.WHITE), 4)

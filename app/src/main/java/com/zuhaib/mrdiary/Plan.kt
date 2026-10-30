@@ -86,7 +86,7 @@ class PlanActivity : BaseActivity() {
                     if (d.id !in visited && ds < 0) add("Pehli visit")
                 }.joinToString("  ")
                 val sub = listOf(d.specialty, if (d.dclass.isNotBlank()) "Class ${d.dclass}" else "", d.timing).filter { it.isNotBlank() }.joinToString(" • ")
-                val row = listRow("${r.idx + 1}. ${d.name}", sub, tags, iconBtn("📞") { call(d.phone) },
+                val row = listRow("${r.idx + 1}. ${d.label}", sub, tags, iconBtn("📞") { call(d.phone) },
                     { open(DetailingActivity::class.java, d.id) },
                     { confirm("${d.name} ko is din ke plan se hatana hai?", "Hatao") { db.removeTourEntry(day, r.session, d.id); refresh() } })
                 if (d.id in visited) row.alpha = 0.55f
@@ -178,7 +178,7 @@ class PlanActivity : BaseActivity() {
         val followIds = db.dueFollowups(dE).map { it.doctorId }.toSet()
 
         val docs = all.filter { inArea(it.area) && it.sitsOn(today) }
-            .sortedWith(compareBy<Doctor> { it.id in visitedToday }.thenBy { it.startMinutes }.thenBy { it.category })
+            .sortedWith(compareBy<Doctor> { it.id in visitedToday }.thenBy { !it.fav }.thenBy { it.startMinutes })
         val notToday = all.count { inArea(it.area) && !it.sitsOn(today) }
 
         val done = docs.count { it.id in visitedToday }
@@ -193,7 +193,7 @@ class PlanActivity : BaseActivity() {
                 if (d.id !in visitedToday && d.isOverdue()) add(if (ds < 0) "⚠ Kabhi nahi mile" else "⚠ $ds din se")
             }.joinToString("  ")
             val row = listRow(
-                "${d.name}  [${d.category}]",
+                d.label,
                 listOf(if (d.timing.isNotBlank()) "🕐 ${d.timing}" else "🕐 timing nahi likhi", d.clinic, d.area).filter { it.isNotBlank() }.joinToString(" • "),
                 tags, iconBtn("📞") { call(d.phone) },
                 { open(DetailingActivity::class.java, d.id) }
@@ -249,13 +249,13 @@ class OverdueActivity : BaseActivity() {
             setPadding(dp(4), dp(8), 0, dp(4))
         })
         val list = all.filter { cat.isBlank() || it.category == cat }
-            .sortedWith(compareBy<Doctor> { it.category }.thenByDescending { val d = it.daysSince(); if (d < 0) 9999 else d - it.cycleDays })
+            .sortedWith(compareBy<Doctor> { !it.fav }.thenBy { it.category }.thenByDescending { val d = it.daysSince(); if (d < 0) 9999 else d - it.cycleDays })
         if (list.isEmpty()) content.add(empty("Shabaash! Koi doctor overdue nahi. 👏"))
         list.forEach { d ->
             val ds = d.daysSince()
             content.add(
                 listRow(
-                    "${d.name}  [${d.category}]",
+                    d.label,
                     listOf(d.specialty, d.area, if (d.timing.isNotBlank()) "🕐 ${d.timing}" else "").filter { it.isNotBlank() }.joinToString(" • "),
                     if (ds < 0) "⚠ Abhi tak koi visit nahi" else "⚠ $ds din se nahi mile (har ${d.cycleDays} din milna hai)",
                     iconBtn("📞") { call(d.phone) },

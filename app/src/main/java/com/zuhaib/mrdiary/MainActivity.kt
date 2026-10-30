@@ -99,7 +99,7 @@ class MainActivity : BaseActivity() {
             section("⏰ 'A' doctors jo overdue hain (${od.size})")
             od.take(5).forEach { d ->
                 val ds = d.daysSince()
-                content.add(listRow(d.name, listOf(d.area, d.timing).filter { it.isNotBlank() }.joinToString(" • "),
+                content.add(listRow(d.label, listOf(d.area, d.timing).filter { it.isNotBlank() }.joinToString(" • "),
                     if (ds < 0) "⚠ Kabhi nahi mile" else "⚠ $ds din se", iconBtn("📞") { call(d.phone) },
                     { open(DetailingActivity::class.java, d.id) }), 6)
             }

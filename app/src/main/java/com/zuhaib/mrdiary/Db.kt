@@ -34,8 +34,10 @@ data class Doctor(
     val area: String, val phone: String, val timeFrom: String = "", val timeTo: String = "",
     val days: String = "", val lastVisit: Long = 0, val category: String = "B",
     val code: String = "", val qual: String = "", val dclass: String = "", val aliases: String = "",
-    val digilyzr: Int = -1
+    val digilyzr: Int = -1, val fav: Boolean = false
 ) {
+    /** List mein naam: favourite ho to ⭐ */
+    val label: String get() = (if (fav) "⭐ " else "") + name
     /** 1 = Digilyzr list mein hai, 0 = sirf tour plan mein, -1 = khud add kiya */
     val notInDigilyzr: Boolean get() = digilyzr == 0
     val dayList: List<String> get() = Days.parse(days)
@@ -136,7 +138,7 @@ data class OrderItem(var productId: Long, var name: String, var qty: Int, var pr
 /** Report ke liye: naam, ginti, raqam */
 data class Agg(val name: String, val count: Double, val amount: Double)
 
-class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "mrdiary_v3.db", null, 4) {
+class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "mrdiary_v3.db", null, 5) {
 
     companion object {
         @Volatile private var inst: Db? = null
@@ -156,6 +158,7 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         d.execSQL("CREATE TABLE visits(id INTEGER PRIMARY KEY AUTOINCREMENT, doctor_id INTEGER, date INTEGER, products TEXT DEFAULT '', notes TEXT DEFAULT '', followup INTEGER DEFAULT 0, follow_done INTEGER DEFAULT 0)")
         v3(d)
         v4(d)
+        v5(d)
         Seed.run(app, d)
         Seed.doctors(app, d)
     }
@@ -167,7 +170,11 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         }
         if (old < 3) v3(d)
         if (old < 4) { v4(d); Seed.doctors(app, d) }
+        if (old < 5) v5(d)
     }
+
+    /** v5: favourite doctors */
+    private fun v5(d: SQLiteDatabase) = d.execSQL("ALTER TABLE doctors ADD COLUMN fav INTEGER DEFAULT 0")
 
     /** v4: Digilyzr fields + tour plan */
     private fun v4(d: SQLiteDatabase) {
@@ -292,11 +299,12 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         s("time_from"), s("time_to"), s("days"),
         if (getColumnIndex("last") >= 0) l("last") else 0,
         s("category").ifBlank { "B" },
-        s("code"), s("qual"), s("dclass"), s("aliases"), i("digilyzr")
+        s("code"), s("qual"), s("dclass"), s("aliases"), i("digilyzr"),
+        if (getColumnIndex("fav") >= 0) i("fav") == 1 else false
     )
 
     fun doctors(): List<Doctor> = q(
-        "SELECT d.*, IFNULL((SELECT MAX(date) FROM visits v WHERE v.doctor_id=d.id),0) AS last FROM doctors d ORDER BY d.name COLLATE NOCASE"
+        "SELECT d.*, IFNULL((SELECT MAX(date) FROM visits v WHERE v.doctor_id=d.id),0) AS last FROM doctors d ORDER BY d.fav DESC, d.name COLLATE NOCASE"
     ) { it.toDoctor() }
 
     fun doctor(id: Long): Doctor? = q(
@@ -483,6 +491,11 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         upsert("tour", 0, cv("date" to day, "area" to area, "session" to session, "idx" to idx, "doctor_id" to doctorId))
     }
 
+    fun replaceTourDoctor(date: Long, session: String, oldId: Long, newId: Long) {
+        writableDatabase.update("tour", cv("doctor_id" to newId), "date=? AND session=? AND doctor_id=?",
+            arrayOf(Range.dayStart(date).toString(), session, oldId.toString()))
+    }
+
     fun removeTourEntry(date: Long, session: String, doctorId: Long) =
         del("tour", "date=? AND session=? AND doctor_id=?", Range.dayStart(date), session, doctorId)
 
@@ -495,6 +508,8 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         val set = d.aliases.split("|").filter { it.isNotBlank() }.toMutableSet()
         if (set.add(alias)) upsert("doctors", id, cv("aliases" to set.joinToString("|")))
     }
+
+    fun setFav(id: Long, fav: Boolean) = upsert("doctors", id, cv("fav" to (if (fav) 1 else 0)))
 
     fun setDays(id: Long, days: String) = upsert("doctors", id, cv("days" to days))
 
