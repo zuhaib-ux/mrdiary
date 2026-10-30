@@ -92,6 +92,21 @@ object Days {
     } catch (e: Exception) { 24 * 60 }
 }
 
+/** Doctor ke saath product ki qism */
+object Kinds {
+    const val WRITING = 1; const val REQUEST = 2; const val REMIND = 3
+    val ALL = listOf(WRITING, REQUEST, REMIND)
+    fun emoji(k: Int) = when (k) { 1 -> "✅"; 2 -> "🎯"; else -> "🔔" }
+    fun title(k: Int) = when (k) { 1 -> "✅ Already likh rahe hain"; 2 -> "🎯 Request / promote karna hai"; else -> "🔔 Reminder dena hai" }
+    fun badge(k: Int) = when (k) { 1 -> " ✅ PRESCRIBING "; 2 -> " 🎯 REQUEST "; else -> " 🔔 REMINDER " }
+    fun question(k: Int) = when (k) {
+        1 -> "Kaun si medicines already likh rahe hain?"; 2 -> "Kaun si medicines ki request karni hai?"
+        else -> "Kin medicines ka reminder dena hai?"
+    }
+    /** Detailing mein pehle request, phir reminder, phir prescribing */
+    fun order(k: Int) = when (k) { 2 -> 0; 3 -> 1; else -> 2 }
+}
+
 data class SupplierInvoice(
     val id: Long, val storeId: Long, val storeName: String, val date: Long,
     val invNo: String, val amount: Double, val photo: String?, val note: String
@@ -301,7 +316,7 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         del("doctors", "id=?", id)
     }
 
-    /** product_id -> kind (1 = already prescribe kar rahe, 2 = promote karna hai) */
+    /** product_id -> kind (1 = already prescribe kar rahe, 2 = request / promote, 3 = reminder) */
     fun doctorProducts(doctorId: Long): Map<Long, Int> =
         q("SELECT product_id, kind FROM doctor_products WHERE doctor_id=?", doctorId) { it.l("product_id") to it.i("kind") }.toMap()
 
@@ -327,10 +342,10 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
     fun removeDoctorProduct(doctorId: Long, productId: Long) =
         del("doctor_products", "doctor_id=? AND product_id=?", doctorId, productId)
 
-    fun doctorProductCounts(): Map<Long, Pair<Int, Int>> {
-        val out = HashMap<Long, Pair<Int, Int>>()
-        q("SELECT doctor_id, SUM(kind=1) AS a, SUM(kind=2) AS b FROM doctor_products GROUP BY doctor_id") {
-            out[it.l("doctor_id")] = it.i("a") to it.i("b")
+    fun doctorProductCounts(): Map<Long, IntArray> {
+        val out = HashMap<Long, IntArray>()
+        q("SELECT doctor_id, SUM(kind=1) AS a, SUM(kind=2) AS b, SUM(kind=3) AS c FROM doctor_products GROUP BY doctor_id") {
+            out[it.l("doctor_id")] = intArrayOf(it.i("a"), it.i("b"), it.i("c"))
         }
         return out
     }
@@ -459,6 +474,17 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
             w.setTransactionSuccessful()
         } finally { w.endTransaction() }
     }
+
+    fun addTourEntry(date: Long, area: String, session: String, doctorId: Long) {
+        val day = Range.dayStart(date)
+        val exists = q("SELECT COUNT(*) AS c FROM tour WHERE date=? AND session=? AND doctor_id=?", day, session, doctorId) { it.i("c") }.first()
+        if (exists > 0) return
+        val idx = q("SELECT IFNULL(MAX(idx),-1)+1 AS n FROM tour WHERE date=? AND session=?", day, session) { it.i("n") }.first()
+        upsert("tour", 0, cv("date" to day, "area" to area, "session" to session, "idx" to idx, "doctor_id" to doctorId))
+    }
+
+    fun removeTourEntry(date: Long, session: String, doctorId: Long) =
+        del("tour", "date=? AND session=? AND doctor_id=?", Range.dayStart(date), session, doctorId)
 
     fun addDoctorFromPlan(name: String, area: String): Long = upsert("doctors", 0, cv(
         "name" to name, "area" to area, "aliases" to name, "digilyzr" to 0, "category" to "A"

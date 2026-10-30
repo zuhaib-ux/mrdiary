@@ -87,17 +87,33 @@ class PlanActivity : BaseActivity() {
                 }.joinToString("  ")
                 val sub = listOf(d.specialty, if (d.dclass.isNotBlank()) "Class ${d.dclass}" else "", d.timing).filter { it.isNotBlank() }.joinToString(" • ")
                 val row = listRow("${r.idx + 1}. ${d.name}", sub, tags, iconBtn("📞") { call(d.phone) },
-                    { open(DetailingActivity::class.java, d.id) })
+                    { open(DetailingActivity::class.java, d.id) },
+                    { confirm("${d.name} ko is din ke plan se hatana hai?", "Hatao") { db.removeTourEntry(day, r.session, d.id); refresh() } })
                 if (d.id in visited) row.alpha = 0.55f
                 content.add(row, 6)
             }
         }
+
+        content.add(btn("+ Is din ke plan mein doctor add karo", 1, 14f) { addToDay(area) }, 14)
+        content.add(text("Kisi doctor ko plan se hatane ke liye us ka naam dabaa kar rakho", 12f, color = C.SUB).apply {
+            setPadding(dp(4), dp(6), 0, 0)
+        })
 
         if (isToday || day > Range.dayStart()) {
             val due = Reorder.due(db, 1).filter { it.store.area.isBlank() || area.contains(it.store.area.trim(), true) }
             if (due.isNotEmpty()) {
                 section("🏪 Stores — order due (${due.size})")
                 due.forEach { content.add(reorderRow(it), 6) }
+            }
+        }
+    }
+
+    private fun addToDay(area: String) {
+        pick("Kis waqt?", listOf("🌅 Subah", "🌆 Shaam")) { si ->
+            val sess = if (si == 0) "M" else "E"
+            val docs = db.doctors().sortedBy { it.name }
+            pick("Doctor chuno", docs.map { it.name + if (it.area.isNotBlank()) "  (${it.area})" else "" }) { di ->
+                db.addTourEntry(day, area, sess, docs[di].id); refresh()
             }
         }
     }

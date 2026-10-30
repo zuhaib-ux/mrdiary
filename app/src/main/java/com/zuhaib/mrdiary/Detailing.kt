@@ -51,11 +51,11 @@ class DetailingActivity : BaseActivity() {
         prods.forEach { byBrand.getOrPut(it.brandId) { mutableListOf() }.add(it) }
         val list = byBrand.mapNotNull { (bid, skus) ->
             val b = db.brand(bid) ?: return@mapNotNull null
-            val kind = if (skus.any { kinds[it.id] == 2 }) 2 else 1
+            val kind = skus.map { kinds[it.id] ?: 1 }.minByOrNull { Kinds.order(it) } ?: 1
             Page(b, kind, skus.map { it.id }.toSet())
         }
         // Promote wale pehle, phir jo already likh rahe hain
-        pages = list.sortedBy { if (it.kind == 2) 0 else 1 }
+        pages = list.sortedBy { Kinds.order(it.kind) }
     }
 
     private fun go(i: Int) {
@@ -101,7 +101,7 @@ class DetailingActivity : BaseActivity() {
 
         // ---- Product tabs ----
         val tabs = pages.mapIndexed { i, pg ->
-            chip((if (pg.kind == 2) "🎯 " else "✅ ") + pg.brand.name, i == page) { go(i) }
+            chip(Kinds.emoji(pg.kind) + " " + pg.brand.name, i == page) { go(i) }
         }
         content.add(chipRow(*tabs.toTypedArray()), 10)
 
@@ -115,8 +115,8 @@ class DetailingActivity : BaseActivity() {
         names.add(text(b.name, 24f, true))
         if (b.generic.isNotBlank()) names.add(text("(${b.generic})", 14f, color = C.SUB))
         top.addView(names, LinearLayout.LayoutParams(0, WRAP, 1f))
-        top.addView(text(if (pg.kind == 2) " 🎯 PROMOTE " else " ✅ PRESCRIBING ", 12f, true, Color.WHITE).apply {
-            background = rounded(if (pg.kind == 2) C.ORANGE else C.PRIMARY, 8f)
+        top.addView(text(Kinds.badge(pg.kind), 12f, true, Color.WHITE).apply {
+            background = rounded(when (pg.kind) { 2 -> C.ORANGE; 3 -> 0xFF5E35B1.toInt(); else -> C.PRIMARY }, 8f)
             setPadding(dp(8), dp(4), dp(8), dp(4))
         })
         pc.add(top)
@@ -201,10 +201,11 @@ class DetailingActivity : BaseActivity() {
         if (d.isOverdue() && ds > 0) c.add(text("⚠ $ds din ho gaye (category ${d.category}: har ${d.cycleDays} din milna hai)", 13f, true, C.ORANGE), 6)
         val kinds = db.doctorProducts(d.id)
         val prods = db.products()
-        val pres = prods.filter { kinds[it.id] == 1 }.joinToString(", ") { it.name }
-        val prom = prods.filter { kinds[it.id] == 2 }.joinToString(", ") { it.name }
+        fun names(k: Int) = prods.filter { kinds[it.id] == k }.joinToString(", ") { it.name }
+        val pres = names(1); val req = names(2); val rem = names(3)
         if (pres.isNotBlank()) c.add(text("✅ Likh rahe hain: $pres", 13.5f, color = C.PRIMARY), 6)
-        if (prom.isNotBlank()) c.add(text("🎯 Aaj ye detail karo: $prom", 13.5f, true, C.ORANGE), 4)
+        if (rem.isNotBlank()) c.add(text("🔔 Reminder do: $rem", 13.5f, true, 0xFF5E35B1.toInt()), 4)
+        if (req.isNotBlank()) c.add(text("🎯 Request karo: $req", 13.5f, true, C.ORANGE), 4)
         return c
     }
 }

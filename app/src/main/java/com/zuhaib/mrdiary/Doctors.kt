@@ -45,7 +45,7 @@ class DoctorListActivity : BaseActivity() {
         else listBox.add(text("Naam par tap = literature / detailing • 📋 = detail aur visits", 12f, color = C.SUB).apply { setPadding(dp(4), dp(4), 0, dp(2)) })
         list.forEach { d ->
             val c = counts[d.id]
-            val pc = if (c != null && (c.first + c.second) > 0) "✅ ${c.first}  🎯 ${c.second}  •  " else ""
+            val pc = if (c != null && c.sum() > 0) "✅ ${c[0]}  🎯 ${c[1]}  🔔 ${c[2]}  •  " else ""
             val ds = d.daysSince()
             val last = pc + "[${d.category}] " + when {
                 ds < 0 -> "⚠ Abhi visit nahi hui"
@@ -116,15 +116,13 @@ class DoctorDetailActivity : BaseActivity() {
         // ---- Products ----
         val prods = db.products()
         val kinds = db.doctorProducts(did)
-        val pres = prods.filter { kinds[it.id] == 1 }
-        val prom = prods.filter { kinds[it.id] == 2 }
         val pc = card()
-        pc.add(text("✅ Already prescribe kar rahe (${pres.size})", 15f, true, C.PRIMARY))
-        if (pres.isEmpty()) pc.add(text("Koi nahi", 13.5f, color = C.SUB), 4)
-        else pc.add(chipRow(*pres.map { p -> chip(p.name, true) { productMenu(p, 1) } }.toTypedArray()), 6)
-        pc.add(text("🎯 Promote karna hai (${prom.size})", 15f, true, C.ORANGE), 14)
-        if (prom.isEmpty()) pc.add(text("Koi nahi", 13.5f, color = C.SUB), 4)
-        else pc.add(chipRow(*prom.map { p -> chip(p.name, false) { productMenu(p, 2) } }.toTypedArray()), 6)
+        Kinds.ALL.forEachIndexed { i, k ->
+            val list = prods.filter { kinds[it.id] == k }
+            pc.add(text("${Kinds.title(k)} (${list.size})", 15f, true, if (k == 1) C.PRIMARY else C.ORANGE), if (i == 0) 0 else 14)
+            if (list.isEmpty()) pc.add(text("Koi nahi", 13.5f, color = C.SUB), 4)
+            else pc.add(chipRow(*list.map { p -> chip(p.name, k == 1) { productMenu(p, k) } }.toTypedArray()), 6)
+        }
         pc.add(text("Medicine par tap karo to list badal sakte ho. Lists ✏ Edit se bhi set hoti hain.", 12f, color = C.SUB), 10)
         content.add(pc, 10)
 
@@ -167,14 +165,16 @@ class DoctorDetailActivity : BaseActivity() {
     }
 
     private fun productMenu(p: Product, kind: Int) {
-        val opts = if (kind == 2) listOf("✅ Ab prescribe kar rahe hain", "🗑 List se hatao", "📄 Literature / script kholo")
-                   else listOf("🎯 Wapas promote list mein", "🗑 List se hatao", "📄 Literature / script kholo")
+        val moves = Kinds.ALL.filter { it != kind }
+        val opts = moves.map { "Badal kar: " + Kinds.title(it) } + listOf("🗑 List se hatao", "📄 Literature / script kholo")
         pick(p.name, opts) { i ->
-            when (i) {
-                0 -> { db.setDoctorProduct(did, p.id, if (kind == 2) 1 else 2); refresh()
-                       if (kind == 2) toast("✓ Mubarak ho! ${p.name} ab prescribing mein") }
-                1 -> { db.removeDoctorProduct(did, p.id); refresh() }
-                2 -> open(ProductDetailActivity::class.java, p.brandId)
+            when {
+                i < moves.size -> {
+                    db.setDoctorProduct(did, p.id, moves[i]); refresh()
+                    if (moves[i] == 1) toast("✓ Mubarak ho! ${p.name} ab prescribing mein")
+                }
+                i == moves.size -> { db.removeDoctorProduct(did, p.id); refresh() }
+                else -> open(ProductDetailActivity::class.java, p.brandId)
             }
         }
     }
@@ -183,7 +183,7 @@ class DoctorDetailActivity : BaseActivity() {
         val prods = db.products()
         val kinds = db.doctorProducts(d.id)
         // Promote wali medicines pehle se chuni hui, kyunki visit mein wahi detail karni hain
-        val checked = BooleanArray(prods.size) { kinds[prods[it].id] == 2 }
+        val checked = BooleanArray(prods.size) { kinds[prods[it].id] == 2 || kinds[prods[it].id] == 3 }
         val prodIn = input("Kaun si medicines detail kin",
             prods.filterIndexed { i, _ -> checked[i] }.joinToString(", ") { it.name }, T.TEXT)
         val notes = input("Doctor ne kya kaha, kya promise kiya…", "", T.MULTI)

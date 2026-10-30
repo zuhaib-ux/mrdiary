@@ -16,6 +16,7 @@ class MainActivity : BaseActivity() {
         title = "MR Diary"
         Followups.channel(this)
         Morning.schedule(this)
+        Patches.applyOnce(this)
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 5)
