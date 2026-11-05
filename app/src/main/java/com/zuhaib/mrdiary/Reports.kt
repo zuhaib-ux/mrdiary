@@ -192,5 +192,6 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
         Followups.rescheduleAll(ctx)
         Morning.schedule(ctx)
+        try { Work.rescheduleAll(ctx); Work.scheduleLeaveSoon(ctx); Geo.registerAll(ctx) } catch (_: Exception) {}
     }
 }

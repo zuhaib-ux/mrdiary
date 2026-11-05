@@ -130,6 +130,18 @@ class DoctorDetailActivity : BaseActivity() {
         pc.add(text("Medicine par tap karo to list badal sakte ho. Lists ✏ Edit se bhi set hoti hain.", 12f, color = C.SUB), 10)
         content.add(pc, 10)
 
+        val pl = db.doctorPlaceIds(did).mapNotNull { db.place(it)?.name }
+        content.add(btn("📍 " + (if (pl.isEmpty()) "Jagah set karo (location alerts ke liye)" else pl.joinToString(" • ")), 3, 13.5f) {
+            val places = db.places()
+            val cur = db.doctorPlaceIds(did)
+            val checked = BooleanArray(places.size) { places[it].id in cur }
+            android.app.AlertDialog.Builder(this).setTitle("Yeh doctor kahan baithte hain?")
+                .setMultiChoiceItems(places.map { it.name }.toTypedArray(), checked) { _, i, b -> checked[i] = b }
+                .setPositiveButton("Save") { _, _ -> db.setDoctorPlaces(did, places.filterIndexed { i, _ -> checked[i] }.map { it.id }); refresh() }
+                .setNeutralButton("Nayi jagah") { _, _ -> open(NearbyActivity::class.java) }
+                .setNegativeButton("Cancel", null).show()
+        }, 10)
+
         val ar = hrow()
         ar.addWeighted(btn("📖 Literature dikhao", 1) { open(DetailingActivity::class.java, did) })
         ar.addWeighted(btn("+ Visit add karo") { visitDialog(d) }, 8)

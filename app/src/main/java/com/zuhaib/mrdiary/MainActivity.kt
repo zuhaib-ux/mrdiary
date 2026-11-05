@@ -17,6 +17,8 @@ class MainActivity : BaseActivity() {
         Followups.channel(this)
         Morning.schedule(this)
         Patches.applyOnce(this)
+        Geo.seedOnce(this)
+        try { Work.rescheduleAll(this); Work.scheduleLeaveSoon(this); Geo.registerAll(this) } catch (_: Exception) {}
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 5)
@@ -52,6 +54,8 @@ class MainActivity : BaseActivity() {
         val tiles = listOf(
             Triple("📅", "Aaj ka plan", "Subah / shaam calls") to { open(PlanActivity::class.java) },
             Triple("🗓", "Tour plan", "Mahina, import, check") to { open(TourActivity::class.java) },
+            Triple("📍", "Mere paas kaun?", "Location se doctors") to { open(NearbyActivity::class.java) },
+            Triple("⏰", "Kaam ke reminders", "RCH 4:30 jaisa alarm") to { open(RemindersActivity::class.java) },
             Triple("⏰", "Overdue ($overdue)", "Kaafi din se nahi mile") to { open(OverdueActivity::class.java) },
             Triple("👨‍⚕️", "Doctors", "Literature, visits") to { open(DoctorListActivity::class.java) },
             Triple("🧾", "Naya Order", "Store ka order likho") to { open(OrderEditActivity::class.java) },

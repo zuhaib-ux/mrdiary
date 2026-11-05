@@ -343,6 +343,7 @@ object Morning {
 
 class MorningReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
+        try { Work.scheduleLeaveSoon(ctx) } catch (_: Exception) {}
         val db = Db.get(ctx)
         val today = Days.today()
         val docs = db.doctors()

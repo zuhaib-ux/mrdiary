@@ -109,6 +109,16 @@ object Kinds {
     fun order(k: Int) = when (k) { 2 -> 0; 3 -> 1; else -> 2 }
 }
 
+data class Place(val id: Long, val name: String, val lat: Double, val lon: Double, val radius: Int = 250)
+
+data class WorkReminder(
+    val id: Long, val title: String, val hour: Int, val minute: Int, val days: String,
+    val before: Int, val enabled: Boolean, val placeId: Long
+) {
+    val timeText: String get() = Fmt.time(java.util.Calendar.getInstance().apply {
+        set(java.util.Calendar.HOUR_OF_DAY, hour); set(java.util.Calendar.MINUTE, minute) }.timeInMillis)
+}
+
 data class SupplierInvoice(
     val id: Long, val storeId: Long, val storeName: String, val date: Long,
     val invNo: String, val amount: Double, val photo: String?, val note: String
@@ -138,7 +148,7 @@ data class OrderItem(var productId: Long, var name: String, var qty: Int, var pr
 /** Report ke liye: naam, ginti, raqam */
 data class Agg(val name: String, val count: Double, val amount: Double)
 
-class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "mrdiary_v3.db", null, 5) {
+class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "mrdiary_v3.db", null, 6) {
 
     companion object {
         @Volatile private var inst: Db? = null
@@ -159,6 +169,7 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         v3(d)
         v4(d)
         v5(d)
+        v6(d)
         Seed.run(app, d)
         Seed.doctors(app, d)
     }
@@ -171,9 +182,17 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         if (old < 3) v3(d)
         if (old < 4) { v4(d); Seed.doctors(app, d) }
         if (old < 5) v5(d)
+        if (old < 6) v6(d)
     }
 
     /** v5: favourite doctors */
+    /** v6: jagahein (GPS) aur kaam ke reminders */
+    private fun v6(d: SQLiteDatabase) {
+        d.execSQL("CREATE TABLE IF NOT EXISTS places(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, lat REAL, lon REAL, radius INTEGER DEFAULT 250)")
+        d.execSQL("CREATE TABLE IF NOT EXISTS doctor_places(doctor_id INTEGER, place_id INTEGER, PRIMARY KEY(doctor_id, place_id))")
+        d.execSQL("CREATE TABLE IF NOT EXISTS reminders(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, hour INTEGER, minute INTEGER, days TEXT, before INTEGER DEFAULT 30, enabled INTEGER DEFAULT 1, place_id INTEGER DEFAULT 0)")
+    }
+
     private fun v5(d: SQLiteDatabase) = d.execSQL("ALTER TABLE doctors ADD COLUMN fav INTEGER DEFAULT 0")
 
     /** v4: Digilyzr fields + tour plan */
@@ -512,6 +531,34 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
     fun setFav(id: Long, fav: Boolean) = upsert("doctors", id, cv("fav" to (if (fav) 1 else 0)))
 
     fun setDays(id: Long, days: String) = upsert("doctors", id, cv("days" to days))
+
+    // ---------- places ----------
+    private fun Cursor.toPlace() = Place(l("id"), s("name"), d("lat"), d("lon"), i("radius"))
+    fun places(): List<Place> = q("SELECT * FROM places ORDER BY name COLLATE NOCASE") { it.toPlace() }
+    fun place(id: Long): Place? = q("SELECT * FROM places WHERE id=?", id) { it.toPlace() }.firstOrNull()
+    fun savePlace(p: Place): Long = upsert("places", p.id, cv("name" to p.name, "lat" to p.lat, "lon" to p.lon, "radius" to p.radius))
+    fun deletePlace(id: Long) { del("doctor_places", "place_id=?", id); del("places", "id=?", id) }
+    fun placeDoctorIds(placeId: Long): Set<Long> =
+        q("SELECT doctor_id FROM doctor_places WHERE place_id=?", placeId) { it.l("doctor_id") }.toSet()
+    fun doctorPlaceIds(doctorId: Long): Set<Long> =
+        q("SELECT place_id FROM doctor_places WHERE doctor_id=?", doctorId) { it.l("place_id") }.toSet()
+    fun setPlaceDoctors(placeId: Long, ids: Collection<Long>) {
+        del("doctor_places", "place_id=?", placeId)
+        ids.forEach { writableDatabase.insertWithOnConflict("doctor_places", null, cv("doctor_id" to it, "place_id" to placeId), SQLiteDatabase.CONFLICT_IGNORE) }
+    }
+    fun setDoctorPlaces(doctorId: Long, ids: Collection<Long>) {
+        del("doctor_places", "doctor_id=?", doctorId)
+        ids.forEach { writableDatabase.insertWithOnConflict("doctor_places", null, cv("doctor_id" to doctorId, "place_id" to it), SQLiteDatabase.CONFLICT_IGNORE) }
+    }
+
+    // ---------- kaam ke reminders ----------
+    private fun Cursor.toRem() = WorkReminder(l("id"), s("title"), i("hour"), i("minute"), s("days"), i("before"), i("enabled") == 1, l("place_id"))
+    fun reminders(): List<WorkReminder> = q("SELECT * FROM reminders ORDER BY hour, minute") { it.toRem() }
+    fun reminder(id: Long): WorkReminder? = q("SELECT * FROM reminders WHERE id=?", id) { it.toRem() }.firstOrNull()
+    fun saveReminder(r: WorkReminder): Long = upsert("reminders", r.id, cv(
+        "title" to r.title, "hour" to r.hour, "minute" to r.minute, "days" to r.days,
+        "before" to r.before, "enabled" to r.enabled, "place_id" to r.placeId))
+    fun deleteReminder(id: Long) = del("reminders", "id=?", id)
 
     // ---------- supplier invoices ----------
     private fun Cursor.toInv() = SupplierInvoice(

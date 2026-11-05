@@ -7,6 +7,10 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
@@ -52,6 +56,8 @@
         <activity android:name=".InvoiceListActivity" />
         <activity android:name=".ExpenseActivity" />
         <activity android:name=".TourActivity" />
+        <activity android:name=".NearbyActivity" />
+        <activity android:name=".RemindersActivity" />
 
         <provider
             android:name=".FilesProvider"
@@ -61,6 +67,9 @@
 
         <receiver android:name=".FollowupReceiver" android:exported="false" />
         <receiver android:name=".MorningReceiver" android:exported="false" />
+        <receiver android:name=".ArriveReceiver" android:exported="false" />
+        <receiver android:name=".WorkAlarmReceiver" android:exported="false" />
+        <receiver android:name=".LeaveSoonReceiver" android:exported="false" />
         <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
