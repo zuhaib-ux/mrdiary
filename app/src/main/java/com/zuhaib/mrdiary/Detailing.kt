@@ -88,6 +88,13 @@ class DetailingActivity : BaseActivity() {
         }, 6)
         hr.addWeighted(btn("📋 Detail", 3, 13f) { open(DoctorDetailActivity::class.java, did) }, 6)
         head.add(hr, 10)
+        val deckN = db.deck(did).size
+        val dr = hrow()
+        dr.addWeighted(btn(if (deckN > 0) "🖼 Deck dikhao ($deckN)" else "🖼 Is doctor ka deck banao", 3, 13f) {
+            if (deckN > 0) open(DeckViewActivity::class.java, did) else open(DeckEditActivity::class.java, did)
+        })
+        if (deckN > 0) dr.addWeighted(btn("✏ Deck badlo", 3, 13f) { open(DeckEditActivity::class.java, did) }, 6)
+        head.add(dr, 6)
         content.add(head)
 
         // ---- Pre-call brief: andar jaane se pehle ----
@@ -203,7 +210,7 @@ class DetailingActivity : BaseActivity() {
         val prods = db.products()
         fun names(k: Int) = prods.filter { kinds[it.id] == k }.joinToString(", ") { it.name }
         val pres = names(1); val req = names(2); val rem = names(3)
-        if (pres.isNotBlank()) c.add(text("✅ Likh rahe hain: $pres", 13.5f, color = C.PRIMARY), 6)
+        if (pres.isNotBlank()) c.add(text("🙏 Thanks bolo (likh rahe hain): $pres", 13.5f, true, C.PRIMARY), 6)
         if (rem.isNotBlank()) c.add(text("🔔 Reminder do: $rem", 13.5f, true, 0xFF5E35B1.toInt()), 4)
         if (req.isNotBlank()) c.add(text("🎯 Request karo: $req", 13.5f, true, C.ORANGE), 4)
         return c

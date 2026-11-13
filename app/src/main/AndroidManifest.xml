@@ -58,6 +58,10 @@
         <activity android:name=".TourActivity" />
         <activity android:name=".NearbyActivity" />
         <activity android:name=".RemindersActivity" />
+        <activity android:name=".DeckEditActivity" />
+        <activity android:name=".DeckPickActivity" />
+        <activity android:name=".DeckViewActivity" android:theme="@style/ViewerTheme" />
+        <activity android:name=".PracticeActivity" />
 
         <provider
             android:name=".FilesProvider"

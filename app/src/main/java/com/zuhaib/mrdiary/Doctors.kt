@@ -37,6 +37,7 @@ class DoctorListActivity : BaseActivity() {
         listBox.removeAllViews()
         val all = db.doctors()
         val counts = db.doctorProductCounts()
+        val decks = db.deckCounts()
         val list = all.filter { d ->
             (area.isBlank() || d.area.trim().equals(area, true)) &&
                 (query.isBlank() || listOf(d.name, d.specialty, d.clinic, d.area).any { it.contains(query, true) })
@@ -45,7 +46,8 @@ class DoctorListActivity : BaseActivity() {
         else listBox.add(text("Naam par tap = literature / detailing • 📋 = detail aur visits", 12f, color = C.SUB).apply { setPadding(dp(4), dp(4), 0, dp(2)) })
         list.forEach { d ->
             val c = counts[d.id]
-            val pc = if (c != null && c.sum() > 0) "✅ ${c[0]}  🎯 ${c[1]}  🔔 ${c[2]}  •  " else ""
+            val pc = (if (c != null && c.sum() > 0) "✅ ${c[0]}  🎯 ${c[1]}  🔔 ${c[2]}  •  " else "") +
+                (decks[d.id]?.let { "🖼 $it  •  " } ?: "")
             val ds = d.daysSince()
             val last = pc + when {
                 ds < 0 -> "⚠ Abhi visit nahi hui"
@@ -146,6 +148,10 @@ class DoctorDetailActivity : BaseActivity() {
         ar.addWeighted(btn("📖 Literature dikhao", 1) { open(DetailingActivity::class.java, did) })
         ar.addWeighted(btn("+ Visit add karo") { visitDialog(d) }, 8)
         content.add(ar, 12)
+        val deckN = db.deck(did).size
+        content.add(btn(if (deckN > 0) "🖼 Is doctor ka deck ($deckN photos) — tarteeb badlo" else "🖼 Is doctor ka deck banao (apni tarteeb mein photos)", 3, 13.5f) {
+            open(DeckEditActivity::class.java, did)
+        }, 8)
         if (autoVisit) { autoVisit = false; content.post { visitDialog(d) } }
 
         val visits = db.visits(did)

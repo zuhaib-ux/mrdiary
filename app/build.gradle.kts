@@ -11,8 +11,8 @@ android {
         applicationId = "com.zuhaib.mrdiary"
         minSdk = 26
         targetSdk = 34
-        versionCode = 10
-        versionName = "3.4"
+        versionCode = 11
+        versionName = "3.5"
     }
 
     // Har build ek hi key se sign ho, taake naya version purane par install ho aur data na mite

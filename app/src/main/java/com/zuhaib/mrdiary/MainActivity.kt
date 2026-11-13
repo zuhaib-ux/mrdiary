@@ -58,6 +58,7 @@ class MainActivity : BaseActivity() {
             Triple("⏰", "Kaam ke reminders", "RCH 4:30 jaisa alarm") to { open(RemindersActivity::class.java) },
             Triple("⏰", "Overdue ($overdue)", "Kaafi din se nahi mile") to { open(OverdueActivity::class.java) },
             Triple("👨‍⚕️", "Doctors", "Literature, visits") to { open(DoctorListActivity::class.java) },
+            Triple("🎤", "Detailing practice", "Aahista bolne ki mashq") to { open(PracticeActivity::class.java) },
             Triple("🧾", "Naya Order", "Store ka order likho") to { open(OrderEditActivity::class.java) },
             Triple("💊", "Products", "Literature, price") to { open(ProductListActivity::class.java) },
             Triple("🏪", "Stores", "Medical stores") to { open(StoreListActivity::class.java) },

@@ -225,6 +225,9 @@ class ZoomImageView(ctx: Context) : ImageView(ctx) {
 
     private fun curScale(): Float { m.getValues(vals); return vals[Matrix.MSCALE_X] }
 
+    /** Zoom kiya hua ho to swipe se photo nahi badalni chahiye */
+    fun isZoomed(): Boolean = curScale() > minScale * 1.05f
+
     private fun fix() {
         val d = drawable ?: return
         m.getValues(vals)

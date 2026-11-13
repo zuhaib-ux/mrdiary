@@ -220,6 +220,7 @@ class ExpenseActivity : BaseActivity() {
         head.add(text(Fmt.rs(total), 28f, true, Color.WHITE))
         head.add(text("${Fmt.plain(km)} km • ${list.map { Range.dayStart(it.date) }.distinct().size} din", 13.5f, color = 0xDDFFFFFF.toInt()), 2)
         content.add(head, 10)
+        content.add(fuelCard(list), 10)
 
         if (list.isNotEmpty()) {
             val c = card()
@@ -297,6 +298,69 @@ class ExpenseActivity : BaseActivity() {
             db.saveExpense(Expense(ex?.id ?: 0, date, type, amt, a, b, note.str()))
             refresh(); true
         }
+    }
+
+    // ---------- fuel: company allowance ke muqable mein asal kharcha ----------
+    private fun allowance(): Double =
+        getSharedPreferences("prefs", MODE_PRIVATE).getFloat("fuel_allow", 380f).toDouble()
+
+    private class FuelSum(val spent: Double, val days: Int, val km: Double, val allow: Double) {
+        val given: Double get() = allow * days
+        val gap: Double get() = spent - given
+        val perDay: Double get() = if (days > 0) spent / days else 0.0
+        val perKm: Double get() = if (km > 0) spent / km else 0.0
+    }
+
+    /** Din = jis din koi bhi entry likhi (fuel ya km). Petrol har din nahi dalta, is liye km har kaam ke din likho. */
+    private fun fuelSum(list: List<Expense>) = FuelSum(
+        list.filter { it.type.contains("Fuel") }.sumOf { it.amount },
+        list.filter { it.type.contains("Fuel") || it.km > 0 }.map { Range.dayStart(it.date) }.distinct().size,
+        list.sumOf { it.km }, allowance()
+    )
+
+    private fun fuelCard(list: List<Expense>): LinearLayout {
+        val f = fuelSum(list)
+        val c = card()
+        c.add(text("⛽ Fuel: company allowance vs asal kharcha", 15f, true, C.PRIMARY_DARK))
+        if (f.days == 0) {
+            c.add(text("Har kaam ke din bike ka meter (subah / shaam) likho, aur jab petrol dalwao to raqam. 2 hafte baad yahan poora hisaab hoga jo manager ko dikha sakte ho.", 13.5f, color = C.SUB), 6)
+        } else {
+            fun line(l: String, v: String, color: Int = C.TEXT, bold: Boolean = false) {
+                val r = hrow()
+                r.addView(text(l, 14f, color = C.SUB), LinearLayout.LayoutParams(0, WRAP, 1f))
+                r.addView(text(v, 14.5f, bold, color))
+                c.add(r, 6)
+            }
+            line("Petrol par kharcha (${f.days} din)", Fmt.rs(f.spent))
+            line("Roz ka ausat", Fmt.rs(Math.round(f.perDay).toDouble()))
+            line("Company deti hai (${Fmt.plain(f.allow)} × ${f.days})", Fmt.rs(f.given))
+            if (f.gap > 0) line("Apni jeb se gaya", Fmt.rs(Math.round(f.gap).toDouble()), C.RED, true)
+            else line("Allowance mein bacha", Fmt.rs(Math.round(-f.gap).toDouble()), C.PRIMARY, true)
+            if (f.km > 0) line("Kul safar", "${Fmt.plain(f.km)} km • ${Fmt.rs(Math.round(f.perKm * 100) / 100.0)} / km")
+            c.add(btn("📤 Yeh hisaab manager ko bhejo", 1, 13.5f) { shareText(fuelText(f, PERIODS[period])) }, 10)
+        }
+        c.add(btn("✏ Company allowance: Rs ${Fmt.plain(f.allow)} / din", 3, 13f) {
+            val box = input("Rs", Fmt.plain(f.allow), T.DEC)
+            formDialog("Fuel allowance", form("Company roz ka kitna deti hai?" to box)) {
+                val v = box.str().toFloatOrNull() ?: return@formDialog false
+                getSharedPreferences("prefs", MODE_PRIVATE).edit().putFloat("fuel_allow", v).apply()
+                refresh(); true
+            }
+        }, 8)
+        return c
+    }
+
+    private fun fuelText(f: FuelSum, name: String): String {
+        val sender = getSharedPreferences("prefs", MODE_PRIVATE).getString("sender", "") ?: ""
+        val sb = StringBuilder("⛽ *Fuel ka hisaab — $name*")
+        if (sender.isNotBlank()) sb.append("\n👤 $sender")
+        sb.append("\n\nKaam ke din: ${f.days}")
+        if (f.km > 0) sb.append("\nKul safar: ${Fmt.plain(f.km)} km")
+        sb.append("\nPetrol par kharcha: ${Fmt.rs(f.spent)}")
+        sb.append("\nRoz ka ausat: ${Fmt.rs(Math.round(f.perDay).toDouble())}")
+        sb.append("\nAllowance (${Fmt.plain(f.allow)} × ${f.days}): ${Fmt.rs(f.given)}")
+        if (f.gap > 0) sb.append("\n*Farq (apni jeb se): ${Fmt.rs(Math.round(f.gap).toDouble())}*")
+        return sb.toString()
     }
 
     private fun claimText(list: List<Expense>, name: String): String {

@@ -109,6 +109,9 @@ object Kinds {
     fun order(k: Int) = when (k) { 2 -> 0; 3 -> 1; else -> 2 }
 }
 
+/** Doctor ke deck ki ek photo. own = sirf is deck ke liye gallery se aayi (hatane par file bhi mitti hai) */
+data class DeckItem(val id: Long, val doctorId: Long, val path: String, val brandId: Long, val sort: Int, val own: Boolean)
+
 data class Place(val id: Long, val name: String, val lat: Double, val lon: Double, val radius: Int = 250)
 
 data class WorkReminder(
@@ -148,7 +151,7 @@ data class OrderItem(var productId: Long, var name: String, var qty: Int, var pr
 /** Report ke liye: naam, ginti, raqam */
 data class Agg(val name: String, val count: Double, val amount: Double)
 
-class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "mrdiary_v3.db", null, 6) {
+class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "mrdiary_v3.db", null, 7) {
 
     companion object {
         @Volatile private var inst: Db? = null
@@ -170,6 +173,7 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         v4(d)
         v5(d)
         v6(d)
+        v7(d)
         Seed.run(app, d)
         Seed.doctors(app, d)
     }
@@ -183,6 +187,12 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
         if (old < 4) { v4(d); Seed.doctors(app, d) }
         if (old < 5) v5(d)
         if (old < 6) v6(d)
+        if (old < 7) v7(d)
+    }
+
+    /** v7: har doctor ka apna literature deck (apni tarteeb mein) */
+    private fun v7(d: SQLiteDatabase) {
+        d.execSQL("CREATE TABLE IF NOT EXISTS doctor_deck(id INTEGER PRIMARY KEY AUTOINCREMENT, doctor_id INTEGER, path TEXT, brand_id INTEGER DEFAULT 0, sort INTEGER DEFAULT 0, own INTEGER DEFAULT 0)")
     }
 
     /** v5: favourite doctors */
@@ -277,7 +287,10 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
     fun addImage(brandId: Long, path: String) =
         upsert("brand_images", 0, cv("brand_id" to brandId, "path" to path, "created" to System.currentTimeMillis()))
 
-    fun deleteImage(id: Long) = del("brand_images", "id=?", id)
+    fun deleteImage(id: Long) {
+        writableDatabase.execSQL("DELETE FROM doctor_deck WHERE own=0 AND path=(SELECT path FROM brand_images WHERE id=?)", arrayOf<Any>(id))
+        del("brand_images", "id=?", id)
+    }
 
     // ---------- products (SKUs) ----------
     private val pSql = "SELECT p.*, b.name AS bname FROM products p JOIN brands b ON b.id=p.brand_id"
@@ -339,6 +352,7 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
 
     fun deleteDoctor(id: Long) {
         del("doctor_products", "doctor_id=?", id)
+        deck(id).forEach { deleteDeck(it) }
         del("visits", "doctor_id=?", id)
         del("doctors", "id=?", id)
     }
@@ -531,6 +545,38 @@ class Db private constructor(private val app: Context) : SQLiteOpenHelper(app, "
     fun setFav(id: Long, fav: Boolean) = upsert("doctors", id, cv("fav" to (if (fav) 1 else 0)))
 
     fun setDays(id: Long, days: String) = upsert("doctors", id, cv("days" to days))
+
+    // ---------- doctor ka deck ----------
+    fun deck(doctorId: Long): List<DeckItem> =
+        q("SELECT * FROM doctor_deck WHERE doctor_id=? ORDER BY sort, id", doctorId) {
+            DeckItem(it.l("id"), it.l("doctor_id"), it.s("path"), it.l("brand_id"), it.i("sort"), it.i("own") == 1)
+        }
+
+    /** Hamesha aakhir mein lagta hai, is liye jis tarteeb mein add karo usi mein rehta hai */
+    fun addDeck(doctorId: Long, path: String, brandId: Long, own: Boolean): Long {
+        val next = q("SELECT IFNULL(MAX(sort),0)+1 AS n FROM doctor_deck WHERE doctor_id=?", doctorId) { it.i("n") }.first()
+        return upsert("doctor_deck", 0, cv("doctor_id" to doctorId, "path" to path, "brand_id" to brandId, "sort" to next, "own" to own))
+    }
+
+    fun deleteDeck(item: DeckItem) {
+        del("doctor_deck", "id=?", item.id)
+        if (item.own) try { File(item.path).delete() } catch (_: Exception) {}
+    }
+
+    fun setDeckBrand(id: Long, brandId: Long) = upsert("doctor_deck", id, cv("brand_id" to brandId))
+
+    /** ids jis tarteeb mein do, deck usi tarteeb mein ho jata hai */
+    fun setDeckOrder(ids: List<Long>) {
+        val w = writableDatabase
+        w.beginTransaction()
+        try {
+            ids.forEachIndexed { i, id -> w.update("doctor_deck", cv("sort" to i + 1), "id=?", arrayOf(id.toString())) }
+            w.setTransactionSuccessful()
+        } finally { w.endTransaction() }
+    }
+
+    fun deckCounts(): Map<Long, Int> =
+        q("SELECT doctor_id, COUNT(*) AS c FROM doctor_deck GROUP BY doctor_id") { it.l("doctor_id") to it.i("c") }.toMap()
 
     // ---------- places ----------
     private fun Cursor.toPlace() = Place(l("id"), s("name"), d("lat"), d("lon"), i("radius"))
