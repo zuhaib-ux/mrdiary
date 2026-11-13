@@ -205,6 +205,7 @@ class ZoomImageView(ctx: Context) : ImageView(ctx) {
 
     fun setBitmap(b: Bitmap) {
         setImageBitmap(b)
+        fit()
         post { fit() }
     }
 
@@ -227,6 +228,9 @@ class ZoomImageView(ctx: Context) : ImageView(ctx) {
 
     /** Zoom kiya hua ho to swipe se photo nahi badalni chahiye */
     fun isZoomed(): Boolean = curScale() > minScale * 1.05f
+
+    /** Zoom hata kar photo poori screen par fit karo */
+    fun reset() = fit()
 
     private fun fix() {
         val d = drawable ?: return

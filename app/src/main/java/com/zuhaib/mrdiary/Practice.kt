@@ -9,6 +9,8 @@ import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.BackgroundColorSpan
@@ -18,6 +20,7 @@ import android.view.Gravity
 import android.view.WindowManager
 import android.widget.TextView
 import java.io.File
+import java.util.Locale
 
 /**
  * Detailing practice: script ke lafz ek ek karke aahista roshan hote hain (pacer),
@@ -37,6 +40,13 @@ class PracticeActivity : BaseActivity() {
     private var recorder: MediaRecorder? = null
     private var player: MediaPlayer? = null
     private val h = Handler(Looper.getMainLooper())
+
+    // ---- saaf awaaz mein sunna (phone ki Google awaaz) ----
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var speaking = false
+    private var starts: List<Int> = emptyList()      // har lafz kahan se shuru hota hai
+    private val VOICES = listOf("hi" to "Roman Urdu", "en" to "English", "ur" to "اردو")
 
     private var scriptTv: TextView? = null
     private var timeTv: TextView? = null
@@ -88,6 +98,65 @@ class PracticeActivity : BaseActivity() {
         super.onPause()
         if (running) stop(false)
         releasePlayer()
+        stopSpeak()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try { tts?.shutdown() } catch (_: Exception) {}
+        tts = null
+    }
+
+    private fun voice(): String {
+        val saved = getSharedPreferences("prefs", MODE_PRIVATE).getString("tts_voice", "") ?: ""
+        if (saved.isNotBlank()) return saved
+        return if (words.any { w -> w.any { it in '\u0600'..'\u06FF' } }) "ur" else "hi"
+    }
+
+    private fun stopSpeak() {
+        if (!speaking) return
+        speaking = false
+        try { tts?.stop() } catch (_: Exception) {}
+        pos = -1
+    }
+
+    /** Script ko aahista, saaf awaaz mein suno; jo lafz bola ja raha ho woh roshan hota hai */
+    private fun listen() {
+        if (running) stop(false)
+        releasePlayer()
+        val t = tts
+        if (t == null) {
+            toast("Awaaz tayyar ho rahi hai…")
+            tts = TextToSpeech(applicationContext) { st ->
+                h.post {
+                    if (st == TextToSpeech.SUCCESS) { ttsReady = true; listen() }
+                    else { tts = null; toast("Is phone par awaaz (Text-to-speech) nahi mili") }
+                }
+            }
+            return
+        }
+        if (!ttsReady) return
+        val code = voice()
+        var r = t.setLanguage(when (code) { "ur" -> Locale("ur", "PK"); "en" -> Locale("en", "IN"); else -> Locale("hi", "IN") })
+        if (r < TextToSpeech.LANG_AVAILABLE && code == "en") r = t.setLanguage(Locale.US)
+        if (r < TextToSpeech.LANG_AVAILABLE) {
+            toast("Yeh awaaz phone mein install nahi. Neeche doosri awaaz chuno, ya Settings → Text-to-speech → Google → Install voice data")
+            return
+        }
+        t.setSpeechRate(when (wpm) { 90 -> 0.7f; 110 -> 0.85f; else -> 1f })
+        t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(id: String?) {}
+            override fun onDone(id: String?) { h.post { if (speaking) { speaking = false; pos = -1; refresh() } } }
+            @Deprecated("Deprecated in Java")
+            override fun onError(id: String?) { h.post { if (speaking) { speaking = false; pos = -1; refresh() } } }
+            override fun onRangeStart(id: String?, start: Int, end: Int, frame: Int) {
+                val i = starts.indexOfLast { it <= start }
+                h.post { if (speaking && i >= 0) { pos = i; paint() } }
+            }
+        })
+        speaking = true; pos = -1; result = ""
+        refresh()
+        t.speak(words.joinToString(" "), TextToSpeech.QUEUE_FLUSH, null, "detail")
     }
 
     private fun recFile(): File = File(File(filesDir, "audio").apply { mkdirs() }, "practice_$bid.m4a")
@@ -110,6 +179,8 @@ class PracticeActivity : BaseActivity() {
         if (brands.none { it.id == bid }) bid = (brands.firstOrNull { it.script.isNotBlank() } ?: brands[0]).id
         val b = brands.first { it.id == bid }
         words = b.script.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+        var o = 0
+        starts = words.map { w -> val st = o; o += w.length + 1; st }
 
         // ---- Aaj ki mashq ----
         val prefs = getSharedPreferences("prefs", MODE_PRIVATE)
@@ -124,7 +195,7 @@ class PracticeActivity : BaseActivity() {
         content.add(chipRow(*brands.map { br ->
             chip((if (br.script.isBlank()) "" else "📝 ") + br.name, br.id == bid) {
                 if (running) stop(false)
-                releasePlayer(); bid = br.id; pos = -1; result = ""; refresh(); scrollToTop()
+                stopSpeak(); releasePlayer(); bid = br.id; pos = -1; result = ""; refresh(); scrollToTop()
             }
         }.toTypedArray()), 10)
 
@@ -137,7 +208,7 @@ class PracticeActivity : BaseActivity() {
         // ---- Raftaar ----
         val speeds = listOf(90 to "🐢 Bohat aahista", 110 to "Aahista", 130 to "Normal")
         content.add(chipRow(*speeds.map { (v, l) ->
-            chip(l, v == wpm) { if (running) stop(false); wpm = v; pos = -1; refresh() }
+            chip(l, v == wpm) { if (running) stop(false); stopSpeak(); wpm = v; pos = -1; refresh() }
         }.toTypedArray()), 10)
 
         val est = estimateSec()
@@ -157,9 +228,18 @@ class PracticeActivity : BaseActivity() {
         timeTv = content.add(text(if (running) "0.0 sec" else "", 30f, true, C.PRIMARY_DARK).apply { gravity = Gravity.CENTER }, 8)
 
         // ---- Buttons ----
-        if (running) {
+        if (speaking) {
+            content.add(btn("⏹ Awaaz roko", 2, 17f) { stopSpeak(); refresh() }, 6)
+        } else if (running) {
             content.add(btn(if (withRec) "⏹ Bol liya — Roko" else "⏹ Roko", 2, 17f) { stop() }, 6)
         } else {
+            content.add(btn("🔊 Pehle saaf awaaz mein suno", 1, 15.5f) { listen() }, 6)
+            val cur = voice()
+            content.add(chipRow(*VOICES.map { (code, label) ->
+                chip("🗣 $label", code == cur) {
+                    getSharedPreferences("prefs", MODE_PRIVATE).edit().putString("tts_voice", code).apply(); refresh()
+                }
+            }.toTypedArray()), 6)
             content.add(btn("🎙 Record karke practice karo", 0, 16f) { start(true) }, 6)
             content.add(btn("▶ Sirf pacer (bina recording)", 1, 14.5f) { start(false) }, 8)
             if (recFile().exists()) content.add(btn(if (player?.isPlaying == true) "⏸ Roko" else "🔊 Apni pichli recording suno", 3, 14.5f) { togglePlay() }, 8)
@@ -192,6 +272,7 @@ class PracticeActivity : BaseActivity() {
     }
 
     private fun start(rec: Boolean) {
+        stopSpeak()
         if (rec && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), RC_MIC); return
         }

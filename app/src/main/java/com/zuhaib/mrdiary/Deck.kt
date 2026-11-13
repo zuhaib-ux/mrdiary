@@ -319,61 +319,26 @@ class DeckViewActivity : Activity() {
     private var did = 0L
     private var index = 0
     private var items: List<DeckItem> = emptyList()
-    private var kinds: Map<Long, Int> = emptyMap()
-    private var names: Map<Long, String> = emptyMap()
     private lateinit var zoom: ZoomImageView
-    private lateinit var banner: TextView
-    private lateinit var counter: TextView
-    private lateinit var swipe: GestureDetector
+
+    // swipe: ungli rakhne se uthane tak khud naapte hain (double-tap zoom is mein dakhal nahi deta)
+    private var downX = 0f
+    private var downY = 0f
+    private var zoomedAtDown = false
+    private var multiTouch = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         did = intent.getLongExtra("id", 0)
         index = savedInstanceState?.getInt("index") ?: intent.getIntExtra("index", 0)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        val db = Db.get(this)
-        items = db.deck(did).filter { File(it.path).exists() }
-        kinds = DeckCue.brandKinds(db, did)
-        names = db.brands().associate { it.id to it.name }
-        val dn = resources.displayMetrics.density
-        fun dp(v: Int) = (v * dn).toInt()
+        items = Db.get(this).deck(did).filter { File(it.path).exists() }
 
+        // Doctor ke saamne sirf photo: na upar koi likhai, na neeche buttons
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         zoom = ZoomImageView(this)
         root.addView(zoom, FrameLayout.LayoutParams(MATCH, MATCH))
-
-        banner = TextView(this).apply {
-            textSize = 17f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER; setPadding(dp(12), dp(10), dp(12), dp(10))
-        }
-        root.addView(banner, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.TOP))
-
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
-            setBackgroundColor(0x99000000.toInt()); setPadding(0, dp(6), 0, dp(6))
-        }
-        fun navBtn(t: String, f: () -> Unit) = TextView(this).apply {
-            text = t; textSize = 26f; setTextColor(Color.WHITE)
-            setPadding(dp(28), dp(4), dp(28), dp(4)); setOnClickListener { f() }
-        }
-        counter = TextView(this).apply { setTextColor(Color.WHITE); textSize = 16f }
-        bar.addView(navBtn("◀") { show(index - 1) })
-        bar.addView(counter)
-        bar.addView(navBtn("▶") { show(index + 1) })
-        root.addView(bar, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM))
         setContentView(root)
-
-        swipe = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
-                if (e1 == null || zoom.isZoomed()) return false
-                val dx = e2.x - e1.x
-                if (abs(vx) > abs(vy) * 1.5f && abs(dx) > dp(60) && abs(vx) > 500) {
-                    show(if (dx < 0) index + 1 else index - 1)
-                    return true
-                }
-                return false
-            }
-        })
 
         if (items.isEmpty()) {
             Toast.makeText(this, "Deck khali hai", Toast.LENGTH_SHORT).show()
@@ -389,28 +354,36 @@ class DeckViewActivity : Activity() {
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        swipe.onTouchEvent(ev)
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = ev.x; downY = ev.y
+                zoomedAtDown = zoom.isZoomed(); multiTouch = false
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> multiTouch = true
+            MotionEvent.ACTION_UP -> {
+                val dx = ev.x - downX
+                val dy = ev.y - downY
+                val min = 48 * resources.displayMetrics.density
+                if (!multiTouch && !zoomedAtDown && abs(dx) > min && abs(dx) > abs(dy) * 1.2f) {
+                    val handled = super.dispatchTouchEvent(ev)
+                    show(if (dx < 0) index + 1 else index - 1)
+                    return handled
+                }
+            }
+        }
         return super.dispatchTouchEvent(ev)
     }
 
     private fun show(i: Int, first: Boolean = false) {
-        if (i < 0) return
-        if (i >= items.size) {
-            Toast.makeText(this, "Deck khatam — yeh aakhri photo thi", Toast.LENGTH_SHORT).show()
+        if (i < 0 || i >= items.size) {
+            zoom.reset()          // kinare par: photo wahi rahe, bas seedhi ho jaye
             return
         }
         if (i == index && !first) return
         index = i
-        val item = items[index]
         val dm = resources.displayMetrics
-        val bmp = Img.load(item.path, max(dm.widthPixels, dm.heightPixels) * 2)
+        val bmp = Img.load(items[index].path, max(dm.widthPixels, dm.heightPixels) * 2)
         if (bmp != null) zoom.setBitmap(bmp)
-        val kind = kinds[item.brandId]
-        val line = DeckCue.line(kind, names[item.brandId] ?: "")
-        banner.text = line
-        banner.setBackgroundColor((DeckCue.color(kind) and 0x00FFFFFF) or 0xE6000000.toInt())
-        banner.visibility = if (line.isBlank()) View.GONE else View.VISIBLE
-        counter.text = "  ${index + 1} / ${items.size}  "
-        if (!first) { zoom.alpha = 0.3f; zoom.animate().alpha(1f).setDuration(160).start() }
+        if (!first) { zoom.alpha = 0.3f; zoom.animate().alpha(1f).setDuration(140).start() }
     }
 }
